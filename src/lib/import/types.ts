@@ -33,10 +33,39 @@ export type ImportedTrade = {
   isInTodaysShares?: boolean;
 };
 
+/** A dividend read from a broker's file: one payment of one instrument on one day. */
+export type ImportedDividend = {
+  externalId: string;
+  brokerTicker: string;
+  symbol: string;
+  name: string;
+  /** Unix time (ms) of the payment. */
+  time: number;
+  /** Gross amount and tax withheld, exactly as in the file, in `currency`. */
+  gross: number;
+  tax: number;
+  /** Currency the amounts are in (for XTB: the account currency). */
+  currency: string;
+  /** Gross dividend per share, when the file gives it in `currency`. */
+  perShare: number | null;
+};
+
+/** A deposit, withdrawal, interest or interest tax read from a broker's file. */
+export type ImportedCashOperation = {
+  externalId: string;
+  type: 'deposit' | 'withdrawal' | 'interest' | 'tax';
+  /** Exactly as in the file, without the sign; in the account currency. */
+  amount: number;
+  time: number;
+  note: string | null;
+};
+
 export type ImportFile = {
   /** Currency of the broker account (the rates are given in it). */
   accountCurrency: string | null;
   trades: ImportedTrade[];
+  dividends: ImportedDividend[];
+  cashOperations: ImportedCashOperation[];
   /** Tickers that could not be mapped to a supported market. */
   unsupportedTickers: string[];
 };

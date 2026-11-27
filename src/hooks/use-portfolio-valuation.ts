@@ -1,23 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { notifyDataChanged } from '@/db/events';
+import { dividendInBase, type DividendAmounts } from '@/lib/dividends';
 import type { Position } from '@/lib/positions';
 import { readNumberPreference, writePreference } from '@/lib/preferences';
 import { rangeStartTime } from '@/lib/ranges';
 import {
   buildPortfolioSeries,
   valuePosition,
+  withPositionDividends,
+  type CashInput,
+  type DividendLike,
   type MarketSnapshot,
   type PortfolioSeries,
   type PositionValuation,
 } from '@/lib/valuation';
-import { clearMarketCache, forgetCached, mapWithConcurrency } from '@/market/cache';
+import { forgetCached, mapWithConcurrency } from '@/market/cache';
+import { refreshQuotes, reportMarketOpen, useQuotesVersion } from '@/market/live-quotes';
 import {
   fxSymbol,
   loadDailyHistory,
   loadIntraday,
-  loadSplits,
-  markHistoryStale,
+  loadCorporateEvents,
   storedQuote,
 } from '@/market/history';
 import type { ChartRange, PriceHistory } from '@/market/types';
@@ -106,7 +110,23 @@ type ValuationOptions = {
    * position screen) turn it off to save requests.
    */
   withHistory?: boolean;
+  /** Dividends received; their net amount counts towards the profit. */
+  dividends?: readonly (DividendLike & { id: string; portfolioId: string; symbol: string })[];
+  /** Portfolios whose dividends also count towards the result of each position. */
+  positionDividendPortfolios?: ReadonlySet<string>;
+  /** Cash portfolios: their value includes the cash and the result counts from deposits. */
+  cash?: CashInput;
 };
+
+const NO_CASH: CashInput = { portfolioIds: new Set(), operations: [] };
+
+const NO_PORTFOLIOS: ReadonlySet<string> = new Set();
+
+const NO_DIVIDENDS: readonly (DividendLike & {
+  id: string;
+  portfolioId: string;
+  symbol: string;
+})[] = [];
 
 /**
  * Loads prices and FX rates for the given positions and values them over the
@@ -118,7 +138,12 @@ export function usePortfolioValuation(
   positions: Position[],
   range: ChartRange,
   baseCurrency: string,
-  { withHistory = true }: ValuationOptions = {}
+  {
+    withHistory = true,
+    dividends = NO_DIVIDENDS,
+    positionDividendPortfolios = NO_PORTFOLIOS,
+    cash = NO_CASH,
+  }: ValuationOptions = {}
 ) {
   const [state, setState] = useState<State>({
     data: null,
@@ -128,6 +153,9 @@ export function usePortfolioValuation(
   });
   const [reloadKey, setReloadKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const quotesVersion = useQuotesVersion();
+  const dataRef = useRef<MarketData | null>(null);
+  dataRef.current = state.data;
 
   /** First trade per symbol: history and splits are needed from then on. */
   const firstTrades = useMemo(() => {
@@ -168,7 +196,14 @@ export function usePortfolioValuation(
   useEffect(() => {
     const symbols = [...firstTrades.keys()];
     if (symbols.length === 0) {
-      setState({ data: null, isLoading: false, error: null, syncError: false });
+      // Nothing to download; a cash portfolio is still valued (its cash).
+      const empty: MarketData = {
+        quotes: new Map(),
+        fxQuotes: new Map(),
+        daily: new Map(),
+        fxDaily: new Map(),
+      };
+      setState({ data: empty, isLoading: false, error: null, syncError: false });
       setIsRefreshing(false);
       return;
     }
@@ -179,19 +214,21 @@ export function usePortfolioValuation(
       currencies.map((currency) => [currency, fxSymbol(currency, baseCurrency)])
     );
 
-    // Splits are checked alongside (they rarely change and the check is
-    // cached for hours). A new one changes the shares the trades count in
-    // and drops the stored closes: then the data is read again.
+    // Splits and dividends are checked alongside (they rarely change and the
+    // check is cached for hours). A new split changes the shares the trades
+    // count in and drops the stored closes: then the data is read again.
     const splitsCheck = mapWithConcurrency([...firstTrades], CONCURRENCY, ([symbol, date]) =>
-      loadSplits(symbol, date).then((isNew) => (isNew ? symbol : null))
+      loadCorporateEvents(symbol, date)
     );
 
     (async () => {
       try {
         // Everything at once; the slowest request decides, not a chain of them.
-        const [liveQuotes, liveFxQuotes, daily, fxDaily] = await Promise.all([
+        const quotesLoad = Promise.all([
           loadMap(symbols, (symbol) => loadIntraday(symbol)),
           loadMap(currencies, (currency) => loadIntraday(fxSymbols.get(currency)!)),
+        ]);
+        const historyLoad = Promise.all([
           withHistory
             ? loadMap(symbols, (symbol) => loadDailyHistory(symbol, firstTrades.get(symbol)!))
             : EMPTY_LOAD,
@@ -202,6 +239,7 @@ export function usePortfolioValuation(
               )
             : EMPTY_LOAD,
         ]);
+        const [liveQuotes, liveFxQuotes] = await quotesLoad;
         if (isCancelled) return;
 
         // Offline or rate limited: value positions at the last stored close.
@@ -209,6 +247,20 @@ export function usePortfolioValuation(
         const fxQuotes = withStoredFallback(liveFxQuotes, currencies, (currency) =>
           fxSymbols.get(currency)!
         );
+        reportMarketOpen([...quotes.map.values()].some((quote) => quote.isMarketOpen));
+        // On a refresh the new prices show at once; the history (already on
+        // screen) is only topped up after them.
+        if (dataRef.current) {
+          setState((previous) =>
+            previous.data
+              ? { ...previous, data: { ...previous.data, quotes: quotes.map, fxQuotes: fxQuotes.map } }
+              : previous
+          );
+          setIsRefreshing(false);
+        }
+
+        const [daily, fxDaily] = await historyLoad;
+        if (isCancelled) return;
         const failed = quotes.failed + fxQuotes.failed + daily.failed + fxDaily.failed;
         const nothingLoaded = quotes.map.size === 0 && daily.map.size === 0;
         const usedStored = quotes.usedStored || fxQuotes.usedStored;
@@ -244,16 +296,19 @@ export function usePortfolioValuation(
         setIsRefreshing(false);
       }
 
-      const splitResults = await splitsCheck;
+      const eventResults = await splitsCheck;
       if (isCancelled) return;
-      const splitSymbols = splitResults.flatMap((result) =>
-        result.status === 'fulfilled' && result.value ? [result.value] : []
+      const symbolsList = [...firstTrades.keys()];
+      const news = eventResults.map((result) =>
+        result.status === 'fulfilled' ? result.value : null
       );
+      const splitSymbols = symbolsList.filter((_, index) => news[index]?.hasNewSplit);
       if (splitSymbols.length > 0) {
         for (const symbol of splitSymbols) forgetCached(`daily:${symbol}:`);
-        notifyDataChanged();
         setReloadKey((key) => key + 1);
       }
+      // Re-read the data: positions after a split, dividends after new ones.
+      if (news.some((item) => item?.hasNewSplit || item?.hasNewDividends)) notifyDataChanged();
     })();
 
     return () => {
@@ -261,7 +316,7 @@ export function usePortfolioValuation(
     };
     // `loadKey` stands for the symbols, first trades and currencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadKey, reloadKey]);
+  }, [loadKey, reloadKey, quotesVersion]);
 
   // The range only picks what to draw from the loaded data.
   const rangeStart = rangeStartTime(range, firstTradeDate);
@@ -281,12 +336,47 @@ export function usePortfolioValuation(
   const series = useMemo<PortfolioSeries | null>(
     () =>
       snapshot
-        ? buildPortfolioSeries(positions, snapshot, range, baseCurrency, rangeStart)
+        ? buildPortfolioSeries(
+            positions,
+            snapshot,
+            range,
+            baseCurrency,
+            rangeStart,
+            Date.now(),
+            dividends,
+            cash
+          )
         : null,
-    [snapshot, range, rangeStart, positions, baseCurrency]
+    [snapshot, range, rangeStart, positions, baseCurrency, dividends, cash]
   );
 
-  const valuations = useMemo(() => {
+  /** Every dividend in the base currency (gross, tax, net), by id. */
+  const dividendAmounts = useMemo(() => {
+    const map = new Map<string, DividendAmounts>();
+    if (!snapshot) return map;
+    const fxAt = (currency: string, time: number) => {
+      if (currency === baseCurrency) return 1;
+      const history = snapshot.fxSinceFirstTrade?.get(currency);
+      if (!history || history.points.length === 0) {
+        // No history (e.g. a currency without positions): today's rate.
+        const quote = snapshot.fxQuotes.get(currency);
+        return quote?.price ?? null;
+      }
+      let rate = history.points[0].close;
+      for (const point of history.points) {
+        if (point.time > time) break;
+        rate = point.close;
+      }
+      return rate;
+    };
+    for (const dividend of dividends) {
+      const amounts = dividendInBase(dividend, baseCurrency, fxAt);
+      if (amounts) map.set(dividend.id, amounts);
+    }
+    return map;
+  }, [snapshot, dividends, baseCurrency]);
+
+  const priceValuations = useMemo(() => {
     const map = new Map<string, PositionValuation>();
     if (!snapshot) return map;
     for (const position of positions) {
@@ -316,18 +406,35 @@ export function usePortfolioValuation(
     }
   }, [updatedAt, state.data]);
 
+  // Pull to refresh: current prices of everything on screen. Daily closes
+  // are topped up on their own schedule (they are stored), so this is one
+  // request per instrument and currency instead of two.
   const refresh = useCallback(() => {
-    clearMarketCache();
-    markHistoryStale();
     setIsRefreshing(true);
-    setReloadKey((key) => key + 1);
+    refreshQuotes();
   }, []);
+
+  // The result of each position, with the dividends of portfolios set to include them.
+  const valuations = useMemo(() => {
+    const included = new Map<string, number>();
+    for (const dividend of dividends) {
+      if (!positionDividendPortfolios.has(dividend.portfolioId)) continue;
+      const amounts = dividendAmounts.get(dividend.id);
+      if (amounts) included.set(dividend.symbol, (included.get(dividend.symbol) ?? 0) + amounts.net);
+    }
+    const map = new Map<string, PositionValuation>();
+    for (const [symbol, valuation] of priceValuations) {
+      map.set(symbol, withPositionDividends(valuation, included.get(symbol) ?? 0));
+    }
+    return map;
+  }, [priceValuations, dividends, dividendAmounts, positionDividendPortfolios]);
 
   return {
     series,
     /** Range of the data on screen: the selected one (no waiting for data). */
     displayedRange: range,
     valuations,
+    dividendAmounts,
     updatedAt,
     isLoading: state.isLoading,
     isRefreshing,

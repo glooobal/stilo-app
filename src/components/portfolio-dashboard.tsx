@@ -31,8 +31,8 @@ export function PortfolioDashboard({ dashboard }: { dashboard: PortfolioDashboar
 
 const styles = StyleSheet.create({
   content: {
-    gap: 20,
-    paddingTop: 8,
+    gap: 28,
+    paddingTop: 12,
     paddingBottom: 32,
   },
 });

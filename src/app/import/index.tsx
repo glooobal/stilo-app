@@ -9,6 +9,8 @@ import { InstrumentLogo } from '@/components/instrument-logo';
 import { Colors } from '@/constants/colors';
 import { restoreBackup } from '@/db/backup';
 import { SCHEMA_VERSION } from '@/db/database';
+import { addCashOperations } from '@/db/cash';
+import { addDividends } from '@/db/dividends';
 import { saveInstrument } from '@/db/instruments';
 import { addTransactions } from '@/db/transactions';
 import { usePortfolios } from '@/hooks/use-portfolio';
@@ -33,7 +35,7 @@ type Source = { id: string; name: string; broker: Broker | null };
 
 const SOURCES: Source[] = [
   ...BROKERS.map((broker) => ({ id: broker.id, name: broker.name, broker })),
-  { id: BACKUP_SOURCE, name: 'Kopia zapasowa 12payouts', broker: null },
+  { id: BACKUP_SOURCE, name: 'Kopia zapasowa Stilo', broker: null },
 ];
 
 type PickedBrokerFile = { kind: 'broker'; name: string; file: ImportFile };
@@ -140,10 +142,15 @@ export default function ImportScreen() {
       ? plan.oversoldWithDuplicates
       : plan.oversoldSymbol
     : null;
+  const dividendsToImport = plan?.dividends ?? [];
+  const cashToImport = plan?.cashOperations ?? [];
   const canImport =
     picked?.kind === 'backup'
       ? picked.backup.portfolios.length > 0
-      : plan != null && portfolio != null && toImport.length > 0 && !oversoldSymbol;
+      : plan != null &&
+        portfolio != null &&
+        toImport.length + dividendsToImport.length + cashToImport.length > 0 &&
+        !oversoldSymbol;
 
   const close = () => router.back();
 
@@ -164,11 +171,17 @@ export default function ImportScreen() {
       if (!plan || !portfolio) return;
       for (const instrument of plan.instruments) saveInstrument(instrument);
       addTransactions(toImport);
+      addDividends(dividendsToImport);
+      addCashOperations(cashToImport);
       writePreference(LAST_PORTFOLIO_PREFERENCE, portfolio.id);
       close();
+      const dividendNote =
+        dividendsToImport.length > 0
+          ? ` i ${dividendsToImport.length} ${dividendsLabel(dividendsToImport.length)}`
+          : '';
       Alert.alert(
         'Zaimportowano',
-        `Dodano ${toImport.length} ${operationsLabel(toImport.length)} do portfela „${portfolio.name}”.`
+        `Dodano ${toImport.length} ${operationsLabel(toImport.length)}${dividendNote} do portfela „${portfolio.name}”.`
       );
     } catch (error) {
       Alert.alert(
@@ -185,6 +198,7 @@ export default function ImportScreen() {
       return [
         ['Portfele', String(countActive(backup.portfolios))],
         ['Operacje', String(countActive(backup.transactions))],
+        ['Dywidendy', String(countActive(backup.dividends))],
         ['Data kopii', Number.isNaN(created) ? '—' : formatUpdatedAt(created)],
       ];
     }
@@ -193,8 +207,13 @@ export default function ImportScreen() {
       ['Kupno', String(plan.buyCount)],
       ['Sprzedaż', String(plan.sellCount)],
       ['Instrumenty', String(new Set(plan.transactions.map((t) => t.symbol)).size)],
+      ['Dywidendy', String(plan.dividends.length)],
     ];
-    if (plan.duplicateCount > 0) rows.push(['Zaimportowane wcześniej', String(plan.duplicateCount)]);
+    if (plan.cashOperations.length > 0) {
+      rows.push(['Wpłaty, wypłaty i odsetki', String(plan.cashOperations.length)]);
+    }
+    const earlier = plan.duplicateCount + plan.duplicateDividendCount;
+    if (earlier > 0) rows.push(['Zaimportowane wcześniej', String(earlier)]);
     return rows;
   }, [plan, picked]);
   const duplicateCount = plan?.possibleDuplicates.length ?? 0;
@@ -205,10 +224,16 @@ export default function ImportScreen() {
           plan.skippedTickers.length > 0
             ? `Pominięte (nieobsługiwany rynek lub brak notowań): ${plan.skippedTickers.join(', ')}.`
             : null,
+          plan.cashSkipReason === 'not-cash'
+            ? 'Wpłaty i wypłaty z pliku zostaną pominięte: ten portfel nie śledzi gotówki.'
+            : plan.cashSkipReason === 'currency'
+              ? 'Wpłaty i wypłaty z pliku zostaną pominięte: portfel jest w innej walucie niż konto.'
+              : null,
           plan.isCurrencyMismatch
             ? `Konto ${broker?.name} jest w ${plan.accountCurrency}, a portfel w ${portfolio?.baseCurrency}. Walutowe transakcje zostaną przeliczone po kursach rynkowych.`
             : null,
-          toImport.length === 0 && plan.duplicateCount + duplicateCount > 0
+          toImport.length + dividendsToImport.length + cashToImport.length === 0 &&
+          plan.duplicateCount + plan.duplicateDividendCount + duplicateCount > 0
             ? 'Wszystkie transakcje z tego pliku są już w portfelu.'
             : null,
         ].filter((text): text is string => text != null)
@@ -234,7 +259,7 @@ export default function ImportScreen() {
     if (warnings.length > 0) return { color: WARNING_COLOR, text: warnings.join('\n') };
     if (plan) {
       return {
-        text: 'Kursy walut i prowizje z pliku zostaną zapisane z transakcjami. Dywidendy i wpłaty nie są jeszcze importowane.',
+        text: 'Kursy walut i prowizje z pliku zostaną zapisane z transakcjami. Dywidendy z pliku zastąpią te wyliczone przez aplikację. Wpłaty i odsetki nie są jeszcze importowane.',
       };
     }
     return null;
@@ -287,7 +312,7 @@ export default function ImportScreen() {
             </FieldGroup.Section>
           ) : broker ? (
             <FieldGroup.Section title="Portfel">
-              <Row spacing={12}>
+              <Row alignment="center" spacing={12}>
                 <Text>Importuj do</Text>
                 <Spacer flexible />
                 <Picker
@@ -315,7 +340,7 @@ export default function ImportScreen() {
                   <Text>
                     {broker
                       ? broker.exportHint
-                      : 'Wybierz plik kopii zapisany w Ustawieniach (12payouts-kopia-….json).'}
+                      : 'Wybierz plik kopii zapisany w Ustawieniach (stilo-kopia-….json).'}
                   </Text>
                 )}
               </FieldGroup.SectionFooter>
@@ -336,7 +361,7 @@ export default function ImportScreen() {
                 </ListItem>
               ))}
               {duplicateCount > 0 ? (
-                <Row spacing={12}>
+                <Row alignment="center" spacing={12}>
                   <Text>{`Możliwe duplikaty: ${duplicateCount}`}</Text>
                   <Spacer flexible />
                   <Picker
@@ -389,6 +414,14 @@ function operationsLabel(count: number, form: 'accusative' | 'nominative' = 'acc
   const lastTwo = count % 100;
   if (lastDigit >= 2 && lastDigit <= 4 && (lastTwo < 12 || lastTwo > 14)) return 'operacje';
   return 'operacji';
+}
+
+function dividendsLabel(count: number): string {
+  if (count === 1) return 'dywidendę';
+  const lastDigit = count % 10;
+  const lastTwo = count % 100;
+  if (lastDigit >= 2 && lastDigit <= 4 && (lastTwo < 12 || lastTwo > 14)) return 'dywidendy';
+  return 'dywidend';
 }
 
 function recordsLabel(count: number): string {

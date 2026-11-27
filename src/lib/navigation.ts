@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 
 import { listPortfolios } from '@/db/portfolios';
 import type { TransactionSide } from '@/db/transactions';
+import type { CashOperationType } from '@/lib/cash';
 import type { Instrument } from '@/market/types';
 
 export function openTransactionEditor(transactionId: string) {
@@ -72,6 +73,40 @@ export function openNewTransaction(
       ...portfolioParams,
     },
   });
+}
+
+/** A deposit, withdrawal or interest of a cash portfolio (sheet). */
+export function openCashOperation(type: CashOperationType, portfolioId?: string) {
+  if (!listPortfolios().some((item) => item.isCash)) {
+    Alert.alert(
+      'Brak portfela gotówkowego',
+      'Wpłaty i wypłaty dodajesz do portfela gotówkowego. Tę opcję wybierasz przy tworzeniu nowego portfela.',
+      [
+        { text: 'Anuluj', style: 'cancel' },
+        { text: 'Nowy portfel', isPreferred: true, onPress: () => openPortfolioEditor() },
+      ]
+    );
+    return;
+  }
+  router.push({ pathname: '/cash/form', params: { type, ...(portfolioId ? { portfolioId } : {}) } });
+}
+
+export function openCashEditor(operationId: string) {
+  router.push({ pathname: '/cash/form', params: { operationId } });
+}
+
+/** Add a dividend by hand (sheet). */
+export function openNewDividend(symbol?: string, portfolioId?: string) {
+  if (!ensurePortfolio()) return;
+  router.push({
+    pathname: '/dividend/form',
+    params: { ...(symbol ? { symbol } : {}), ...(portfolioId ? { portfolioId } : {}) },
+  });
+}
+
+/** Correct or delete a dividend (sheet). */
+export function openDividendEditor(dividendId: string) {
+  router.push({ pathname: '/dividend/form', params: { dividendId } });
 }
 
 /** Position screen; within a portfolio when `portfolioId` is given. */

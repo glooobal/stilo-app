@@ -1,3 +1,5 @@
+import { getImportedCashIds } from '@/db/cash';
+import { getImportedDividendIds } from '@/db/dividends';
 import { getSavedInstrument } from '@/db/instruments';
 import { getSplits } from '@/db/splits';
 import type { Portfolio } from '@/db/portfolios';
@@ -9,9 +11,11 @@ import {
   type NewTransaction,
 } from '@/db/transactions';
 import { marketData, type Instrument } from '@/market';
-import { loadSplits } from '@/market/history';
+import { loadCorporateEvents } from '@/market/history';
 
 import { toISODate } from '../date';
+import type { NewCashOperation } from '../cash';
+import type { NewDividend } from '../dividends';
 import { findOversell } from '../fifo';
 import { adjustForSplits, splitRatio } from '../splits';
 import type { Broker, ImportedTrade, ImportFile } from './types';
@@ -52,6 +56,17 @@ export type ImportPlan = {
   sellCount: number;
   /** Trades already imported earlier. */
   duplicateCount: number;
+  /** New dividends, ready to save (they replace the ones worked out by the app). */
+  dividends: NewDividend[];
+  /** Dividends already imported earlier. */
+  duplicateDividendCount: number;
+  /** Deposits, withdrawals and interest (cash portfolios only). */
+  cashOperations: NewCashOperation[];
+  /**
+   * Why the file's deposits and withdrawals are left out: the portfolio
+   * does not keep cash, or keeps it in another currency.
+   */
+  cashSkipReason: 'not-cash' | 'currency' | null;
   /** Tickers left out: not supported, or without market data. */
   skippedTickers: string[];
   /** The account currency differs from the portfolio's (rates are not used then). */
@@ -75,9 +90,10 @@ async function resolveInstrument(
     return null;
   }
 
-  // Splits since the first trade, to count every trade in the right shares.
+  // Splits (and dividends) since the first trade, to count every trade in
+  // the right shares.
   try {
-    await loadSplits(trade.symbol, firstDate);
+    await loadCorporateEvents(trade.symbol, firstDate);
   } catch (error) {
     if (signal.aborted) throw error;
   }
@@ -222,8 +238,68 @@ export async function prepareImport(
     return null;
   };
 
+  // Dividends of instruments found above or already in the app.
+  const importedDividends = getImportedDividendIds(portfolio.id, broker.id);
+  const knownSymbols = new Set(
+    [...resolved.values()].flatMap((match) => (match ? [match.instrument.symbol] : []))
+  );
+  const dividends: NewDividend[] = [];
+  let duplicateDividendCount = 0;
+  for (const dividend of file.dividends) {
+    if (importedDividends.has(dividend.externalId)) {
+      duplicateDividendCount++;
+      continue;
+    }
+    if (!knownSymbols.has(dividend.symbol) && !getSavedInstrument(dividend.symbol)) {
+      skipped.add(dividend.brokerTicker);
+      continue;
+    }
+    dividends.push({
+      portfolioId: portfolio.id,
+      symbol: dividend.symbol,
+      exDate: null,
+      paidAt: toISODate(new Date(dividend.time)),
+      quantity: null,
+      perShare: dividend.perShare,
+      gross: dividend.gross,
+      tax: dividend.tax,
+      currency: dividend.currency,
+      fxRate: null,
+      fxCurrency: null,
+      source: broker.id as NewDividend['source'],
+      externalId: dividend.externalId,
+    });
+  }
+
+  // Money in and out, for a cash portfolio in the account's currency.
+  const cashOperations: NewCashOperation[] = [];
+  let cashSkipReason: ImportPlan['cashSkipReason'] = null;
+  if (file.cashOperations.length > 0) {
+    if (!portfolio.isCash) cashSkipReason = 'not-cash';
+    else if (file.accountCurrency !== portfolio.baseCurrency) cashSkipReason = 'currency';
+    else {
+      const imported = getImportedCashIds(portfolio.id, broker.id);
+      for (const operation of file.cashOperations) {
+        if (imported.has(operation.externalId)) continue;
+        cashOperations.push({
+          portfolioId: portfolio.id,
+          type: operation.type,
+          amount: operation.amount,
+          date: toISODate(new Date(operation.time)),
+          note: operation.note,
+          source: broker.id,
+          externalId: operation.externalId,
+        });
+      }
+    }
+  }
+
   return {
     accountCurrency: file.accountCurrency,
+    dividends,
+    cashOperations,
+    cashSkipReason,
+    duplicateDividendCount,
     instruments: [...resolved.values()].flatMap((match) => (match ? [match.instrument] : [])),
     transactions: unique,
     possibleDuplicates,

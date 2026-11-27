@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { useState } from 'react';
 import { Platform, PlatformColor, StyleSheet, Text, View, type ColorValue } from 'react-native';
 
-import { getBrandLogoUrl, getInstrumentLogoUrl, markLogoMissing } from '@/market/logos';
+import { getBrandLogoUrl, getInstrumentLogoUrls, markLogoMissing } from '@/market/logos';
 
 type InstrumentLogoProps = {
   symbol: string;
@@ -35,12 +35,14 @@ function monogramColor(symbol: string): ColorValue {
 
 /** Company logo with a colored monogram while loading or when none exists. */
 export function InstrumentLogo({ symbol, name, size = 36, domain }: InstrumentLogoProps) {
-  const [hasFailed, setHasFailed] = useState(false);
-  const url = hasFailed
-    ? null
-    : domain
-      ? getBrandLogoUrl(domain, size)
-      : getInstrumentLogoUrl(symbol, size);
+  // Several sources are tried in turn (ticker, then the company website);
+  // the failed ones are remembered per symbol (rows get reused).
+  const [failed, setFailed] = useState<{ symbol: string; urls: string[] }>({ symbol, urls: [] });
+  const failedUrls = failed.symbol === symbol ? failed.urls : [];
+  const urls = domain
+    ? [getBrandLogoUrl(domain, size)].filter((url): url is string => url != null)
+    : getInstrumentLogoUrls(symbol, size);
+  const url = urls.find((candidate) => !failedUrls.includes(candidate)) ?? null;
   const letter = (name.trim()[0] ?? symbol[0] ?? '?').toUpperCase();
 
   return (
@@ -54,13 +56,13 @@ export function InstrumentLogo({ symbol, name, size = 36, domain }: InstrumentLo
       {url ? (
         <Image
           source={url}
-          recyclingKey={symbol}
+          recyclingKey={url}
           contentFit="cover"
           transition={150}
           style={StyleSheet.absoluteFill}
           onError={() => {
-            if (!domain) markLogoMissing(symbol);
-            setHasFailed(true);
+            if (!domain) markLogoMissing(url);
+            setFailed({ symbol, urls: [...failedUrls, url] });
           }}
         />
       ) : null}

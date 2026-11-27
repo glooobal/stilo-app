@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { readPreference, writePreference } from '@/lib/preferences';
 import { CHART_RANGES } from '@/lib/ranges';
@@ -21,7 +21,16 @@ export function usePortfolioDashboard(portfolioId?: string) {
     setRangeState(next);
     writePreference(preferenceKey, next);
   };
-  const valuation = usePortfolioValuation(data.positions, range, data.baseCurrency);
+  const positionDividendPortfolios = useMemo(
+    () =>
+      new Set(data.portfolios.filter((item) => item.includeDividends).map((item) => item.id)),
+    [data.portfolios]
+  );
+  const valuation = usePortfolioValuation(data.positions, range, data.baseCurrency, {
+    dividends: data.dividends,
+    positionDividendPortfolios,
+    cash: data.cash,
+  });
 
   return { ...data, ...valuation, portfolioId, range, setRange };
 }

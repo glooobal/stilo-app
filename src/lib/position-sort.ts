@@ -1,3 +1,4 @@
+import { positionResult, type PositionResultPeriod } from './position-result';
 import type { Position } from './positions';
 import type { PositionValuation } from './valuation';
 
@@ -36,7 +37,9 @@ export function portfolioShares(
 export function sortPositions(
   positions: Position[],
   sort: PositionSort,
-  valuations: Map<string, PositionValuation>
+  valuations: Map<string, PositionValuation>,
+  /** Result sorting follows the result shown with the positions. */
+  resultPeriod: PositionResultPeriod = 'total'
 ): Position[] {
   if (sort === 'name') {
     return [...positions].sort((a, b) =>
@@ -45,7 +48,9 @@ export function sortPositions(
   }
   const key = (position: Position): number | null => {
     const valuation = valuations.get(position.instrument.symbol);
-    if (sort === 'result') return valuation?.baseProfitRatio ?? valuation?.profitRatio ?? null;
+    if (sort === 'result') {
+      return positionResult(valuation, resultPeriod).ratio;
+    }
     // Value and share both compare the value in the base currency, so
     // positions in different currencies are ordered correctly.
     return valuation?.baseValue ?? null;

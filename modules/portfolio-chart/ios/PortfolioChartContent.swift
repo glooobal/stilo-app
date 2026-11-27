@@ -6,11 +6,47 @@ struct ChartAxisLabel: Hashable {
   let text: String
 }
 
+struct ChartMarker {
+  let index: Int
+  let color: Color
+}
+
+struct ChartExtraSeries {
+  let values: [Double]
+  let color: Color
+}
+
+extension Color {
+  /// `#RRGGBB`; gray when the text is not a color.
+  init(hex: String) {
+    let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+    guard digits.count == 6, let number = UInt32(digits, radix: 16) else {
+      self = .gray
+      return
+    }
+    self.init(
+      red: Double((number >> 16) & 0xFF) / 255,
+      green: Double((number >> 8) & 0xFF) / 255,
+      blue: Double(number & 0xFF) / 255
+    )
+  }
+}
+
 final class PortfolioChartModel: ObservableObject {
   @Published var values: [Double] = []
   /// Optional second line, one value per point (e.g. invested capital), drawn dashed.
   @Published var secondaryValues: [Double] = []
   @Published var baseline: Double?
+  /// More solid lines in their own colors (e.g. benchmarks), drawn under the main one.
+  @Published var extraSeries: [ChartExtraSeries] = []
+  /// Dots on the main line, e.g. the user's trades on a price chart.
+  @Published var markers: [ChartMarker] = []
+  /// Values are ratios (0.12 = 12%) and the axis shows percent.
+  @Published var isPercent = false
+  /// The fading gradient under the main line (off when comparing lines).
+  @Published var showsArea = true
+  /// Small chart without axes and labels (e.g. in a list row).
+  @Published var isCompact = false
   @Published var color: Color = .blue
   @Published var xLabels: [ChartAxisLabel] = []
   /// Spoken name of the chart, e.g. "Wartość portfela".
@@ -54,6 +90,11 @@ struct PortfolioChartContent: View {
     hasData && model.secondaryValues.count == model.values.count ? model.secondaryValues : []
   }
 
+  /// Extra lines that have a value for every point.
+  private var extraSeries: [ChartExtraSeries] {
+    hasData ? model.extraSeries.filter { $0.values.count == model.values.count } : []
+  }
+
   private var yDomain: ClosedRange<Double> {
     let values = plottedValues
     var low = values.min() ?? 0
@@ -61,6 +102,12 @@ struct PortfolioChartContent: View {
     if let secondaryLow = secondaryValues.min(), let secondaryHigh = secondaryValues.max() {
       low = min(low, secondaryLow)
       high = max(high, secondaryHigh)
+    }
+    for series in extraSeries {
+      if let seriesLow = series.values.min(), let seriesHigh = series.values.max() {
+        low = min(low, seriesLow)
+        high = max(high, seriesHigh)
+      }
     }
     if hasData, let baseline = model.baseline {
       low = min(low, baseline)
@@ -99,10 +146,16 @@ struct PortfolioChartContent: View {
       AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
         AxisValueLabel {
-          Text(Self.formatAxisValue(value.as(Double.self) ?? 0))
+          Text(
+            model.isPercent
+              ? Self.formatAxisPercent(value.as(Double.self) ?? 0)
+              : Self.formatAxisValue(value.as(Double.self) ?? 0)
+          )
         }
       }
     }
+    .chartXAxis(model.isCompact ? .hidden : .automatic)
+    .chartYAxis(model.isCompact ? .hidden : .automatic)
     .chartOverlay { proxy in
       // Maps the finger position (from UIKit) to a point; draws nothing.
       GeometryReader { geometry in
@@ -162,13 +215,27 @@ struct PortfolioChartContent: View {
 
   @ChartContentBuilder
   private func marks(values: [Double], domain: ClosedRange<Double>, color: Color) -> some ChartContent {
-    ForEach(values.indices, id: \.self) { index in
-      AreaMark(
-        x: .value("Punkt", Double(index)),
-        yStart: .value("Dół", domain.lowerBound),
-        yEnd: .value("Wartość", values[index])
-      )
-      .foregroundStyle(areaGradient(color: color))
+    if model.showsArea {
+      ForEach(values.indices, id: \.self) { index in
+        AreaMark(
+          x: .value("Punkt", Double(index)),
+          yStart: .value("Dół", domain.lowerBound),
+          yEnd: .value("Wartość", values[index])
+        )
+        .foregroundStyle(areaGradient(color: color))
+      }
+    }
+
+    ForEach(Array(extraSeries.enumerated()), id: \.offset) { seriesIndex, series in
+      ForEach(series.values.indices, id: \.self) { index in
+        LineMark(
+          x: .value("Punkt", Double(index)),
+          y: .value("Wartość", series.values[index]),
+          series: .value("Seria", "Dodatkowa \(seriesIndex)")
+        )
+        .foregroundStyle(series.color)
+        .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+      }
     }
 
     // Under the main line, so the value stays on top where they cross.
@@ -189,7 +256,10 @@ struct PortfolioChartContent: View {
         series: .value("Seria", "Wartość")
       )
       .foregroundStyle(color)
-      .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+      // Thicker among compared lines, so the user's own stands out.
+      .lineStyle(
+        StrokeStyle(lineWidth: extraSeries.isEmpty ? 2.5 : 3.5, lineCap: .round, lineJoin: .round)
+      )
     }
 
     if hasData, let baseline = model.baseline {
@@ -198,10 +268,36 @@ struct PortfolioChartContent: View {
         .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
     }
 
+    // A white ring around each dot keeps it visible on the line.
+    ForEach(Array(markers(count: values.count).enumerated()), id: \.offset) { _, marker in
+      PointMark(
+        x: .value("Punkt", Double(marker.index)),
+        y: .value("Wartość", values[marker.index])
+      )
+      .foregroundStyle(Color(uiColor: .systemBackground))
+      .symbolSize(90)
+
+      PointMark(
+        x: .value("Punkt", Double(marker.index)),
+        y: .value("Wartość", values[marker.index])
+      )
+      .foregroundStyle(marker.color)
+      .symbolSize(40)
+    }
+
     if let selectedIndex, selectedIndex < values.count {
       RuleMark(x: .value("Punkt", Double(selectedIndex)))
         .foregroundStyle(Color.secondary.opacity(0.6))
         .lineStyle(StrokeStyle(lineWidth: 1))
+
+      ForEach(Array(extraSeries.enumerated()), id: \.offset) { _, series in
+        PointMark(
+          x: .value("Punkt", Double(selectedIndex)),
+          y: .value("Wartość", series.values[selectedIndex])
+        )
+        .foregroundStyle(series.color)
+        .symbolSize(50)
+      }
 
       PointMark(
         x: .value("Punkt", Double(selectedIndex)),
@@ -210,6 +306,10 @@ struct PortfolioChartContent: View {
       .foregroundStyle(color)
       .symbolSize(80)
     }
+  }
+
+  private func markers(count: Int) -> [ChartMarker] {
+    hasData ? model.markers.filter { $0.index >= 0 && $0.index < count } : []
   }
 
   private func areaGradient(color: Color) -> LinearGradient {
@@ -244,6 +344,15 @@ struct PortfolioChartContent: View {
     guard index != selectedIndex else { return }
     selectedIndex = index
     onSelectionChange(index, true)
+  }
+
+  /// Axis percent in Polish, e.g. `12%` or `-3,5%` (the value is a ratio).
+  private static func formatAxisPercent(_ value: Double) -> String {
+    value.formatted(
+      .percent
+        .precision(.fractionLength(0...1))
+        .locale(axisLocale)
+    )
   }
 
   /// Short axis value in Polish, e.g. `12,3 tys.` or `1,5 mln`.

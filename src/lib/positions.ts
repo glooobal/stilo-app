@@ -2,7 +2,7 @@ import type { TransactionWithInstrument } from '@/db/transactions';
 import type { Instrument } from '@/market/types';
 
 import { FifoLedger, sortTrades } from './fifo';
-import { convertTrade, tradeDayEnd, tradeRate } from './fx';
+import { checkedTradeRate, convertTrade, tradeRate } from './fx';
 
 const EPSILON = 1e-9;
 
@@ -113,7 +113,10 @@ export function buildPositions(transactions: TransactionWithInstrument[]): {
 }
 
 /** Shares of one instrument held at the end of `date` (`YYYY-MM-DD`). */
-export function quantityOn(transactions: TransactionWithInstrument[], date: string): number {
+export function quantityOn(
+  transactions: readonly { side: 'buy' | 'sell'; quantity: number; tradedAt: string }[],
+  date: string
+): number {
   let quantity = 0;
   for (const transaction of transactions) {
     if (transaction.tradedAt > date) continue;
@@ -146,9 +149,8 @@ export function baseLedgerTotals(
   for (const list of groups.values()) {
     const ledger = new FifoLedger();
     for (const trade of sortTrades(list)) {
-      const rate =
-        tradeRate(trade, baseCurrency) ??
-        marketFxAt(trade.currency, tradeDayEnd(trade.tradedAt));
+      // The given rate, unless it cannot be right; else the market rate of the day.
+      const rate = checkedTradeRate(trade, baseCurrency, marketFxAt);
       if (rate == null) return null;
       ledger.apply(convertTrade(trade, rate, baseCurrency));
     }

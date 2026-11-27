@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 
 import { useDataVersion } from '@/db/events';
 import { listPortfolios, type Portfolio } from '@/db/portfolios';
+import { getCashOperations } from '@/db/cash';
+import { getDividends } from '@/db/dividends';
 import { getTransactions } from '@/db/transactions';
 import { buildPositions } from '@/lib/positions';
 import { useSummaryCurrency } from '@/lib/settings';
@@ -32,6 +34,23 @@ export function usePortfolioData(portfolioId?: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [portfolioId, dataVersion]
   );
+  const dividends = useMemo(
+    () => getDividends(portfolioId ? [portfolioId] : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [portfolioId, dataVersion]
+  );
+  const cashOperations = useMemo(
+    () => getCashOperations(portfolioId ? [portfolioId] : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [portfolioId, dataVersion]
+  );
+  /** Cash portfolios in scope, with their operations, for the valuation. */
+  const cash = useMemo(() => {
+    const ids = portfolios
+      .filter((item) => item.isCash && (!portfolioId || item.id === portfolioId))
+      .map((item) => item.id);
+    return { portfolioIds: new Set(ids), operations: cashOperations };
+  }, [portfolios, portfolioId, cashOperations]);
   const { positions, saleResults } = useMemo(() => buildPositions(transactions), [transactions]);
   const openPositions = useMemo(
     () => positions.filter((position) => position.quantity > 0),
@@ -46,6 +65,11 @@ export function usePortfolioData(portfolioId?: string) {
     positions,
     openPositions,
     saleResults,
+    /** Dividends received, oldest first. */
+    dividends,
+    /** Deposits, withdrawals and interest of cash portfolios, oldest first. */
+    cashOperations,
+    cash,
     /** Currency values are shown in: the portfolio's, or the summary currency for all together. */
     baseCurrency: portfolio?.baseCurrency ?? summaryCurrency,
   };

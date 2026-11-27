@@ -48,6 +48,16 @@ const TICKER_OVERRIDES: Record<string, string> = {
 };
 
 /**
+ * Company websites, tried last: Brandfetch finds a logo by domain most
+ * reliably when it does not know the ticker. Add new ones here.
+ */
+const DOMAIN_OVERRIDES: Record<string, string[]> = {
+  'GPW.WA': ['gpw.pl'],
+  'KRU.WA': ['kruk.eu', 'pl.kruk.eu'],
+  'DIA.WA': ['diag.pl', 'grupadiagnostyka.pl'],
+};
+
+/**
  * Brandfetch ticker for a Yahoo symbol, or `null` for markets whose format
  * Brandfetch does not resolve yet (they show the monogram).
  */
@@ -64,20 +74,40 @@ export function getBrandLogoUrl(domain: string, size: number): string | null {
   return `https://cdn.brandfetch.io/domain/${encodeURIComponent(domain)}/w/${pixels}/h/${pixels}/fallback/404?c=${CLIENT_ID}`;
 }
 
-/**
- * Logo URL for an instrument, or `null` when there is no client ID or the
- * logo is known to be missing. `fallback/404` lets the app show its own
- * monogram instead of Brandfetch's placeholder.
- */
-export function getInstrumentLogoUrl(symbol: string, size: number): string | null {
-  const ticker = toBrandfetchTicker(symbol);
-  if (!CLIENT_ID || !ticker || missingLogos.has(symbol)) {
-    return null;
-  }
+function logoUrl(route: 'ticker' | 'domain', identifier: string, size: number) {
   const pixels = Math.min(2048, Math.max(16, PixelRatio.getPixelSizeForLayoutSize(size)));
-  return `https://cdn.brandfetch.io/ticker/${encodeURIComponent(ticker)}/w/${pixels}/h/${pixels}/fallback/404?c=${CLIENT_ID}`;
+  return `https://cdn.brandfetch.io/${route}/${encodeURIComponent(identifier)}/w/${pixels}/h/${pixels}/fallback/404?c=${CLIENT_ID}`;
 }
 
-export function markLogoMissing(symbol: string) {
-  missingLogos.add(symbol);
+/**
+ * Logo URLs to try for an instrument, in order: the ticker (or its known
+ * Brandfetch ticker), the plain market symbol, then the company website.
+ * Empty without a client ID; URLs known to be missing are left out.
+ * `fallback/404` lets the app show its own monogram instead of
+ * Brandfetch's placeholder.
+ */
+export function getInstrumentLogoUrls(symbol: string, size: number): string[] {
+  if (!CLIENT_ID) return [];
+  const candidates: { key: string; url: string }[] = [];
+  const add = (route: 'ticker' | 'domain', identifier: string | null | undefined) => {
+    if (!identifier) return;
+    const key = `${route}:${identifier}`;
+    if (missingLogos.has(key) || candidates.some((item) => item.key === key)) return;
+    candidates.push({ key, url: logoUrl(route, identifier, size) });
+  };
+  add('ticker', toBrandfetchTicker(symbol));
+  add('ticker', SUPPORTED_TICKER.test(symbol) ? symbol : null);
+  for (const domain of DOMAIN_OVERRIDES[symbol] ?? []) add('domain', domain);
+  return candidates.map((item) => item.url);
+}
+
+/** The first logo URL to try (see `getInstrumentLogoUrls`). */
+export function getInstrumentLogoUrl(symbol: string, size: number): string | null {
+  return getInstrumentLogoUrls(symbol, size)[0] ?? null;
+}
+
+/** Remembers for this session that a logo URL has no logo. */
+export function markLogoMissing(url: string) {
+  const match = /cdn\.brandfetch\.io\/(ticker|domain)\/([^/]+)\//.exec(url);
+  if (match) missingLogos.add(`${match[1]}:${decodeURIComponent(match[2])}`);
 }

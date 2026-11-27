@@ -47,6 +47,15 @@ final class PortfolioChartView: ExpoView, UIGestureRecognizerDelegate {
     addGestureRecognizer(scrubRecognizer)
   }
 
+  /// A small chart without axes (e.g. in a list row): drawn only, no preview.
+  func setCompact(_ compact: Bool) {
+    model.isCompact = compact
+    scrubRecognizer.isEnabled = !compact
+    if compact {
+      endScrub()
+    }
+  }
+
   override func didMoveToWindow() {
     super.didMoveToWindow()
     // Safety net: never leave the screen unscrollable if the view goes away mid-gesture.

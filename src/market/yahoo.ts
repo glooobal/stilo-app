@@ -8,6 +8,7 @@ import {
   type MarketDataProvider,
   type PriceHistory,
   type PriceQuote,
+  type DividendEvent,
   type StockSplit,
 } from './types';
 
@@ -61,6 +62,7 @@ type YahooChartResult = {
   timestamp?: number[];
   events?: {
     splits?: Record<string, { date?: number; numerator?: number; denominator?: number }>;
+    dividends?: Record<string, { date?: number; amount?: number }>;
   };
   indicators?: { quote?: { close?: (number | null)[] }[] };
 };
@@ -268,27 +270,42 @@ export const yahooFinance: MarketDataProvider = {
     return fetchChart(symbol, { range: 'max', interval: '1wk' }, false, signal);
   },
 
-  async getSplits(symbol, fromDate, signal) {
-    // Monthly candles keep the response small; only the split events matter.
+  async getCorporateEvents(symbol, fromDate, signal) {
+    // Monthly candles keep the response small; only the events matter.
     const params = new URLSearchParams({
       period1: String(Math.floor(fromISODate(fromDate).getTime() / 1000)),
       period2: String(Math.floor(Date.now() / 1000)),
       interval: '1mo',
-      events: 'split',
+      events: 'div,split',
     });
     const data = await getJson<{ chart?: { result?: YahooChartResult[] | null } }>(
       `${BASE_URL}/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`,
       signal
     );
     const result = data.chart?.result?.[0];
-    if (!result) throw new MarketDataError('Brak danych o splitach dla tego instrumentu.');
+    if (!result) throw new MarketDataError('Brak danych o zdarzeniach dla tego instrumentu.');
+
     const splits: StockSplit[] = [];
     for (const event of Object.values(result.events?.splits ?? {})) {
       const { date, numerator, denominator } = event;
       if (date == null || !numerator || !denominator) continue;
       splits.push({ date: toISODate(new Date(date * 1000)), numerator, denominator });
     }
-    return splits.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    // Dividends are in the currency of the quotes (London in pence too).
+    const { currency, divisor } = currencyDivisor(result.meta?.currency ?? '');
+    const dividends: DividendEvent[] = [];
+    for (const event of Object.values(result.events?.dividends ?? {})) {
+      if (event.date == null || !event.amount || !currency) continue;
+      dividends.push({
+        exDate: toISODate(new Date(event.date * 1000)),
+        amount: toPrice(event.amount, divisor),
+        currency,
+      });
+    }
+    const byDate = <T extends { date?: string; exDate?: string }>(a: T, b: T) =>
+      (a.date ?? a.exDate ?? '') < (b.date ?? b.exDate ?? '') ? -1 : 1;
+    return { splits: splits.sort(byDate), dividends: dividends.sort(byDate) };
   },
 
   getDailyCloses(symbol, fromDate, signal) {

@@ -3,13 +3,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Colors } from '@/constants/colors';
 import {
-  AVERAGE_PRICE_DIGITS,
   formatDecimalInput,
   formatMoney,
   formatPercent,
   formatPrice,
+  formatSignedMoney,
 } from '@/lib/number';
 import { formatDisplayDate, toISODate } from '@/lib/date';
+import { positionResult, type PositionResultPeriod } from '@/lib/position-result';
 import type { Position } from '@/lib/positions';
 import type { PositionValuation } from '@/lib/valuation';
 
@@ -25,6 +26,8 @@ type HoldingRowProps = {
   share?: number;
   /** Prices are loading for the first time: placeholders instead of "—". */
   isLoading?: boolean;
+  /** Result shown under the value: since purchase or today. */
+  resultPeriod?: PositionResultPeriod;
   onPress: () => void;
 };
 
@@ -45,12 +48,15 @@ export function HoldingRow({
   valuation,
   share,
   isLoading = false,
+  resultPeriod = 'total',
   onPress,
 }: HoldingRowProps) {
   const { instrument } = position;
-  // Current result of the position (unrealized, since purchase).
-  // In the base currency, so a change of the exchange rate counts too.
-  const ratio = valuation?.baseProfitRatio ?? valuation?.profitRatio ?? null;
+  // Current result of the position (unrealized, since purchase), in the base
+  // currency so a change of the exchange rate counts too; with dividends when
+  // the portfolio is set to include them.
+  // The result of the chosen period, as an amount (base currency) and percent.
+  const { amount: result, ratio } = positionResult(valuation, resultPeriod);
   const staleNote = stalePriceNote(valuation);
   const isPlaceholder = isLoading && !valuation;
 
@@ -74,10 +80,9 @@ export function HoldingRow({
           </View>
         ) : (
           <Text numberOfLines={1} style={styles.detail}>
-            {formatDecimalInput(position.quantity)} szt. ·{' '}
-            {share != null
-              ? `${formatPercent(share, false)} portfela`
-              : `śr. ${formatPrice(position.averagePrice, instrument.currency, AVERAGE_PRICE_DIGITS)}`}
+            {/* Quantity @ average price, e.g. "12 @ 101,25 zł" (the average to 2 decimals). */}
+            {`${formatDecimalInput(position.quantity)} @ ${formatPrice(position.averagePrice, instrument.currency, 2)}`}
+            {share != null ? ` · ${formatPercent(share, false)}` : ''}
           </Text>
         )}
       </View>
@@ -94,7 +99,9 @@ export function HoldingRow({
         )}
         {!isPlaceholder && ratio != null ? (
           <Text style={[styles.change, { color: ratio < 0 ? Colors.negative : Colors.positive }]}>
-            {formatPercent(ratio)}
+            {result != null
+              ? `${formatSignedMoney(result, baseCurrency)} (${formatPercent(ratio)})`
+              : formatPercent(ratio)}
           </Text>
         ) : null}
       </View>
@@ -117,7 +124,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 14,
   },
   pressed: {
     backgroundColor: Colors.fill,

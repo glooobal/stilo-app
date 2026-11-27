@@ -28,8 +28,9 @@ import {
 } from '@/db/transactions';
 import { usePortfolioData } from '@/hooks/use-portfolio';
 import { formatDisplayDate, fromISODate, toISODate, todayISODate } from '@/lib/date';
+import { estimateCashBalance } from '@/lib/cash';
 import { calculateSaleProfit, findOversell, type Trade } from '@/lib/fifo';
-import { convertTrade, tradeRate } from '@/lib/fx';
+import { convertTrade, isImplausibleRate, tradeRate } from '@/lib/fx';
 import { formatDecimalInput, formatMoney, formatProfit, parseDecimal } from '@/lib/number';
 import { quantityOn } from '@/lib/positions';
 import {
@@ -61,6 +62,7 @@ const LAST_PORTFOLIO_PREFERENCE = 'transactions.lastPortfolio';
 
 const ERROR_COLOR = '#FF3B30';
 const PROFIT_COLOR = '#34C759';
+const WARNING_COLOR = '#FF9500';
 
 // The decimal keyboard has no return key, so scrolling the form hides it.
 const FORM_MODIFIERS =
@@ -122,7 +124,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
   // The form can open as the first screen of the sheet (editing, or adding
   // from a position screen); then it needs its own close button.
   const isSheetRoot = navigation.getState()?.index === 0;
-  const { portfolios, transactions } = usePortfolioData();
+  const { portfolios, transactions, dividends, cashOperations } = usePortfolioData();
 
   const [portfolioId, setPortfolioId] = useState<string | null>(() => {
     const ids = portfolios.map((item) => item.id);
@@ -205,6 +207,8 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
   const rateState = useNativeState(initialRate);
   const [rateText, setRateText] = useState(initialRate);
   const [isRateLoading, setIsRateLoading] = useState(false);
+  /** Market rate of the trade's day, to warn about a rate that cannot be right. */
+  const [marketRate, setMarketRate] = useState<number | null>(null);
   const [rateError, setRateError] = useState<string | null>(null);
   /** A typed rate (or the one saved for this portfolio currency) is never overwritten. */
   const isRateEditedRef = useRef(savedRate != null);
@@ -285,8 +289,28 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
     return () => controller.abort();
   }, [needsRate, currency, portfolioCurrency, date, rateState]);
 
+  useEffect(() => {
+    setMarketRate(null);
+    if (!needsRate || !currency || !portfolioCurrency) return;
+    const controller = new AbortController();
+    const isoDate = toISODate(date);
+    marketData
+      .getQuote(
+        fxSymbol(currency, portfolioCurrency),
+        isoDate === todayISODate() ? undefined : isoDate,
+        controller.signal
+      )
+      .then((quote) => setMarketRate(quote.price))
+      .catch(() => {
+        // Without it there is simply no warning.
+      });
+    return () => controller.abort();
+  }, [needsRate, currency, portfolioCurrency, date]);
+
   const tradedAt = toISODate(date);
   const rate = needsRate ? parseDecimal(rateText) : 1;
+  const isRateImplausible =
+    needsRate && rate != null && marketRate != null && isImplausibleRate(rate, marketRate);
   const quantity = parseDecimal(quantityText);
   const price = parseDecimal(priceText);
   const fee = feeText.trim() === '' ? 0 : parseDecimal(feeText);
@@ -406,6 +430,23 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
       : saleProfit && currency
         ? { ...saleProfit, currency }
         : null;
+
+  // In a cash portfolio a purchase is paid from the cash: warn before it
+  // goes negative (it is still allowed: the deposit can be added later).
+  const cashPortfolio = portfolios.find((item) => item.id === portfolioId && item.isCash);
+  const cashAfter = useMemo(() => {
+    if (!cashPortfolio || portfolioTotal == null) return null;
+    const before = estimateCashBalance({
+      portfolioId: cashPortfolio.id,
+      baseCurrency: cashPortfolio.baseCurrency,
+      date: tradedAt,
+      transactions,
+      dividends,
+      operations: cashOperations,
+      excludeId: existing?.id,
+    });
+    return before + (side === 'buy' ? -portfolioTotal : portfolioTotal);
+  }, [cashPortfolio, portfolioTotal, tradedAt, transactions, dividends, cashOperations, existing?.id, side]);
 
   const close = () => {
     // Close the whole sheet (the parent stack screen), not just this step.
@@ -532,7 +573,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
           </FieldGroup.Section>
 
           <FieldGroup.Section title="Transakcja">
-            <Row spacing={12}>
+            <Row alignment="center" spacing={12}>
               <Text>Portfel</Text>
               <Spacer flexible />
               <Picker
@@ -545,7 +586,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
                 ))}
               </Picker>
             </Row>
-            <Row spacing={12}>
+            <Row alignment="center" spacing={12}>
               <Text>Ilość</Text>
               <TextInput
                 value={quantityState}
@@ -556,7 +597,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
                 accessibilityLabel="Ilość"
               />
             </Row>
-            <Row spacing={12}>
+            <Row alignment="center" spacing={12}>
               <Text>{`Cena (${currencyLabel})`}</Text>
               <TextInput
                 value={priceState}
@@ -570,7 +611,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
                 accessibilityLabel="Cena za sztukę"
               />
             </Row>
-            <Row spacing={12}>
+            <Row alignment="center" spacing={12}>
               <Text>{needsRate ? 'Prowizja' : `Prowizja (${currencyLabel})`}</Text>
               <TextInput
                 value={feeState}
@@ -592,7 +633,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
               ) : null}
             </Row>
             {needsRate ? (
-              <Row spacing={12}>
+              <Row alignment="center" spacing={12}>
                 <Text>{`Kurs ${currency}/${portfolioCurrency}`}</Text>
                 <TextInput
                   value={rateState}
@@ -611,6 +652,10 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
             <FieldGroup.SectionFooter>
               {validationError ? (
                 <Text textStyle={{ color: ERROR_COLOR }}>{validationError}</Text>
+              ) : isRateImplausible && marketRate != null ? (
+                <Text textStyle={{ color: ERROR_COLOR }}>
+                  {`Kurs różni się o ponad 5% od rynkowego z tego dnia (${formatDecimalInput(marketRate)}), więc w obliczeniach używany jest rynkowy. Popraw go, jeśli to pomyłka.`}
+                </Text>
               ) : (
                 <Text>
                   {needsRate
@@ -652,7 +697,24 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
                 {shownProfit && shownProfit.amount < 0 ? 'Strata' : 'Zysk'}
               </ListItem>
             ) : null}
-            {side === 'sell' ? (
+            {cashPortfolio && cashAfter != null ? (
+              <ListItem
+                trailing={
+                  <Text textStyle={cashAfter < 0 ? { color: WARNING_COLOR, fontWeight: '600' } : undefined}>
+                    {formatMoney(cashAfter, cashPortfolio.baseCurrency)}
+                  </Text>
+                }>
+                Gotówka po operacji
+              </ListItem>
+            ) : null}
+            {cashPortfolio && cashAfter != null && cashAfter < 0 ? (
+              <FieldGroup.SectionFooter>
+                <Text textStyle={{ color: WARNING_COLOR }}>
+                  Za mało gotówki: po zakupie saldo będzie ujemne. Dodaj wpłatę („+” → Wpłata) albo
+                  zapisz mimo to i uzupełnij ją później.
+                </Text>
+              </FieldGroup.SectionFooter>
+            ) : side === 'sell' ? (
               <FieldGroup.SectionFooter>
                 <Text>
                   {baseSaleProfit

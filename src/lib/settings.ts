@@ -19,6 +19,14 @@ export function setSummaryCurrency(currency: string) {
 
 /** The summary currency; updates when it is changed in Settings. */
 export function useSummaryCurrency(): string {
-  useDataVersion();
+  return readSummaryCurrency(useDataVersion());
+}
+
+/**
+ * The version is an argument on purpose: the React Compiler caches calls
+ * with unchanged arguments, so a bare `getSummaryCurrency()` in a hook
+ * would be read once and miss a change in Settings.
+ */
+function readSummaryCurrency(_version: number): string {
   return getSummaryCurrency();
 }

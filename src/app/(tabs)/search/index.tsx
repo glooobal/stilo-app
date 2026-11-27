@@ -1,6 +1,6 @@
 import { router, Stack } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card } from '@/components/card';
 import { InstrumentRow } from '@/components/instrument-row';
@@ -11,12 +11,23 @@ import { getRecentInstruments, searchSavedInstruments } from '@/db/instruments';
 import { useDataVersion } from '@/db/events';
 import { usePortfolioData } from '@/hooks/use-portfolio';
 import { formatDecimalInput } from '@/lib/number';
+import { withRecentView } from '@/lib/recent-views';
+import { getRecentViews, saveRecentViews } from '@/lib/recent-views-store';
 import type { InstrumentSearchResult } from '@/market/types';
 import { MIN_QUERY_LENGTH, useInstrumentSearch } from '@/market/use-instrument-search';
 
-type Row = { instrument: InstrumentSearchResult; detail?: string };
+type Row = { instrument: InstrumentSearchResult; detail?: string; isHeld?: boolean };
 
-function openInstrument(instrument: InstrumentSearchResult) {
+/**
+ * Instruments recently used in transactions. The data version is an
+ * argument so the list is read again after a transaction (the React
+ * Compiler caches calls whose arguments do not change).
+ */
+function readRecentInstruments(_dataVersion: number) {
+  return getRecentInstruments();
+}
+
+function pushInstrument(instrument: InstrumentSearchResult) {
   router.push({
     pathname: '/search/[symbol]',
     params: {
@@ -35,6 +46,23 @@ export default function SearchScreen() {
   const trimmed = query.trim();
   const dataVersion = useDataVersion();
   const { openPositions } = usePortfolioData();
+  const heldQuantities = useMemo(
+    () => new Map(openPositions.map((position) => [position.instrument.symbol, position.quantity])),
+    [openPositions]
+  );
+
+  // Instruments opened from here, newest first (kept between launches).
+  const [recentViews, setRecentViews] = useState(getRecentViews);
+  const openInstrument = (instrument: InstrumentSearchResult) => {
+    const next = withRecentView(recentViews, instrument);
+    setRecentViews(next);
+    saveRecentViews(next);
+    pushInstrument(instrument);
+  };
+  const clearRecentViews = () => {
+    setRecentViews([]);
+    saveRecentViews([]);
+  };
 
   const held: Row[] = useMemo(
     () =>
@@ -44,14 +72,20 @@ export default function SearchScreen() {
       })),
     [openPositions]
   );
+  const viewed: Row[] = useMemo(
+    () =>
+      recentViews.map((instrument) => ({
+        instrument,
+        isHeld: heldQuantities.has(instrument.symbol),
+      })),
+    [recentViews, heldQuantities]
+  );
   const recent: Row[] = useMemo(() => {
-    const heldSymbols = new Set(openPositions.map((position) => position.instrument.symbol));
-    return getRecentInstruments()
-      .filter((instrument) => !heldSymbols.has(instrument.symbol))
+    const shown = new Set([...heldQuantities.keys(), ...recentViews.map((item) => item.symbol)]);
+    return readRecentInstruments(dataVersion)
+      .filter((instrument) => !shown.has(instrument.symbol))
       .map((instrument) => ({ instrument }));
-    // `dataVersion` refreshes the list after a transaction saves an instrument.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openPositions, dataVersion]);
+  }, [heldQuantities, recentViews, dataVersion]);
 
   const saved = useMemo(() => (trimmed ? searchSavedInstruments(trimmed) : []), [trimmed]);
   const remote = useInstrumentSearch(trimmed);
@@ -60,8 +94,16 @@ export default function SearchScreen() {
     return [
       ...saved,
       ...remote.results.filter((instrument) => !savedSymbols.has(instrument.symbol)),
-    ].map((instrument) => ({ instrument }));
-  }, [saved, remote.results]);
+    ].map((instrument) => {
+      // Search results say which instruments are already in a portfolio.
+      const quantity = heldQuantities.get(instrument.symbol);
+      return {
+        instrument,
+        isHeld: quantity != null,
+        detail: quantity != null ? `${formatDecimalInput(quantity)} szt.` : undefined,
+      };
+    });
+  }, [saved, remote.results, heldQuantities]);
 
   const renderRows = (rows: Row[]) =>
     rows.map((row, index) => (
@@ -70,6 +112,7 @@ export default function SearchScreen() {
         <InstrumentRow
           instrument={row.instrument}
           detail={row.detail}
+          isHeld={row.isHeld}
           onPress={() => openInstrument(row.instrument)}
         />
       </View>
@@ -77,7 +120,9 @@ export default function SearchScreen() {
 
   const message = (() => {
     if (!trimmed) {
-      return held.length || recent.length ? null : 'Wyszukaj spółkę lub ETF po nazwie albo symbolu.';
+      return held.length || viewed.length || recent.length
+        ? null
+        : 'Wyszukaj spółkę lub ETF po nazwie albo symbolu.';
     }
     if (trimmed.length < MIN_QUERY_LENGTH) return 'Wpisz co najmniej 2 znaki.';
     if (results.length) return null;
@@ -111,6 +156,23 @@ export default function SearchScreen() {
                   <View style={styles.bottomSpace} />
                 </Card>
               ) : null}
+              {viewed.length ? (
+                <Card
+                  title="Ostatnio oglądane"
+                  accessory={
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Wyczyść ostatnio oglądane"
+                      hitSlop={8}
+                      onPress={clearRecentViews}
+                      style={({ pressed }) => pressed && styles.pressed}>
+                      <Text style={styles.clear}>Wyczyść</Text>
+                    </Pressable>
+                  }>
+                  {renderRows(viewed)}
+                  <View style={styles.bottomSpace} />
+                </Card>
+              ) : null}
               {recent.length ? (
                 <Card title="Ostatnio wybierane">
                   {renderRows(recent)}
@@ -135,6 +197,13 @@ const styles = StyleSheet.create({
   },
   bottomSpace: {
     height: 6,
+  },
+  clear: {
+    fontSize: 15,
+    color: Colors.tint,
+  },
+  pressed: {
+    opacity: 0.5,
   },
   loader: {
     marginTop: 8,

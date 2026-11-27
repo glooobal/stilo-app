@@ -7,6 +7,8 @@ import type { ValueChartProps } from './value-chart.types';
 
 /** Axes without the line until a chart for platforms other than iOS is added. */
 export function ValueChart(props: ValueChartProps) {
+  // A small chart in a list has no room for the note.
+  if (props.compact) return <View style={{ height: props.height ?? 56 }} />;
   return (
     <ChartAxes {...props}>
       <View style={styles.placeholder}>

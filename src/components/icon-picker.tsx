@@ -6,13 +6,11 @@ import { Colors } from '@/constants/colors';
 type IconPickerProps<T extends SFSymbol> = {
   icons: readonly T[];
   value: T;
-  /** Background of the selected icon (the portfolio color). */
-  color: string;
   onChange: (icon: T) => void;
 };
 
-/** Grid of SF Symbols; the selected one is shown on the chosen color. */
-export function IconPicker<T extends SFSymbol>({ icons, value, color, onChange }: IconPickerProps<T>) {
+/** Grid of SF Symbols; the selected one is shown on gray, like the portfolio icons. */
+export function IconPicker<T extends SFSymbol>({ icons, value, onChange }: IconPickerProps<T>) {
   return (
     <View style={styles.grid} accessibilityRole="radiogroup" accessibilityLabel="Ikona portfela">
       {icons.map((icon) => {
@@ -24,7 +22,7 @@ export function IconPicker<T extends SFSymbol>({ icons, value, color, onChange }
             accessibilityLabel={icon}
             accessibilityState={{ selected: isSelected }}
             onPress={() => onChange(icon)}
-            style={[styles.cell, { backgroundColor: isSelected ? color : Colors.fill }]}>
+            style={[styles.cell, { backgroundColor: isSelected ? Colors.iconBackground : Colors.fill }]}>
             <SymbolView
               name={icon}
               tintColor={isSelected ? '#FFFFFF' : Colors.label}

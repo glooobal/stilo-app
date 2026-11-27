@@ -43,3 +43,32 @@ export function tradeDayEnd(tradedAt: string): number {
   const [year, month, day] = tradedAt.split('-').map(Number);
   return new Date(year, month - 1, day).getTime() + 86_399_000;
 }
+
+/**
+ * A rate given with a trade further than this from the market rate of its
+ * day cannot be right (currencies move a few percent a day at most): it is
+ * a typo or a broker file read wrongly.
+ */
+export const MAX_RATE_DEVIATION = 0.05;
+
+/** The given rate is too far from the market rate of the day to be real. */
+export function isImplausibleRate(given: number, market: number | null): boolean {
+  return market != null && market > 0 && Math.abs(given / market - 1) > MAX_RATE_DEVIATION;
+}
+
+/**
+ * Rate used to convert a trade into `baseCurrency`: the one given with the
+ * trade, unless it is implausible next to the market rate of its day; the
+ * market rate when none is given. `null` when neither is known.
+ */
+export function checkedTradeRate(
+  trade: TradeCurrency & { tradedAt: string },
+  baseCurrency: string,
+  marketFxAt: (currency: string, time: number) => number | null
+): number | null {
+  const given = tradeRate(trade, baseCurrency);
+  if (given === 1 && trade.currency === baseCurrency) return 1;
+  const market = marketFxAt(trade.currency, tradeDayEnd(trade.tradedAt));
+  if (given == null) return market;
+  return isImplausibleRate(given, market) ? market : given;
+}

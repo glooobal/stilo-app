@@ -82,6 +82,10 @@ describe('parseBackup', () => {
     expect(() => parseBackup(file({ portfolios: [] }), 5)).toThrow(BackupError);
   });
 
+  it('reads a backup made before dividends as having none', () => {
+    expect(parseBackup(file(), 5).dividends).toEqual([]);
+  });
+
   it('fills columns an older backup lacks', () => {
     const { account_type: _, ...old } = portfolio;
     const backup = parseBackup(file({ portfolios: [old] }), 5);
@@ -94,6 +98,8 @@ describe('planRestore', () => {
     portfolios: new Map(),
     instruments: new Map(),
     transactions: new Map(),
+    dividends: new Map(),
+    cash_operations: new Map(),
   });
 
   it('adds everything to an empty app', () => {
@@ -110,5 +116,13 @@ describe('planRestore', () => {
     expect(plan.transactions.update).toHaveLength(1);
     expect(plan.portfolios.update).toHaveLength(0);
     expect(plan.portfolios.insert).toHaveLength(0);
+  });
+});
+
+describe('legacy backups', () => {
+  it('reads backups made under the old app name', () => {
+    expect(() => parseBackup(JSON.stringify({ format: '12payouts-backup', version: 99 }), 1)).toThrow(
+      'nowszej wersji'
+    );
   });
 });

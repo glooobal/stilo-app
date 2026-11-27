@@ -90,8 +90,41 @@ function sampleFile(options: { withSummary: boolean }) {
     ['My Trades', 'Kruk', 'KRU.PL', 'STOCK', '', 3, 937.5, null, 396.4],
     ['My Trades', '2620520178', 'KRU.PL', '', 'BUY', 3, 937.5, 312.5, 396.4,
       excelDate('2026-06-08T12:30:09Z')],
+    // A US lot paid for in PLN, booked as two cash operations (two fills).
+    ['My Trades', 'Realty Income', 'O.US', 'STOCK', '', 10, 2250, null, 60],
+    ['My Trades', '3000', 'O.US', '', 'BUY', 10, 2250, 61, 60,
+      excelDate('2026-05-04T14:00:00Z')],
   ];
-  return buildXlsx({ 'Closed Positions': closed, 'Cash Operations': [], 'Open Positions': open });
+  const cash = [
+    ['Account number', '53191135'],
+    ['Cash Operations', ''],
+    [],
+    [],
+    ['Type', 'Instrument', 'Ticker', 'Category', 'Time', 'Amount', 'ID', 'Comment', 'Product', 'Position ID'],
+    // One payment booked per lot, each with its tax line.
+    ['Dividend from foreign company on PL market', 'Żabka', 'ZAB.PL', 'STOCK',
+      excelDate('2026-07-31T09:57:05Z'), 4.24, '1', 'ZAB.PL PLN 0.5300/ SHR', 'My Trades', '11'],
+    ['Tax from dividend from foreign company on PL market', 'Żabka', 'ZAB.PL', 'STOCK',
+      excelDate('2026-07-31T09:57:05Z'), -0.64, '2', 'ZAB.PL PLN TFCPLM 15%', 'My Trades', '11'],
+    ['Dividend from foreign company on PL market', 'Żabka', 'ZAB.PL', 'STOCK',
+      excelDate('2026-07-31T09:57:04Z'), 1.06, '3', 'ZAB.PL PLN 0.5300/ SHR', 'My Trades', '12'],
+    ['Tax from dividend from foreign company on PL market', 'Żabka', 'ZAB.PL', 'STOCK',
+      excelDate('2026-07-31T09:57:04Z'), -0.16, '4', 'ZAB.PL PLN TFCPLM 15%', 'My Trades', '12'],
+    ['Dividend', 'XTB', 'XTB.PL', 'STOCK',
+      excelDate('2026-06-24T05:50:32Z'), 40.7, '5', 'XTB.PL PLN 4.0700/ SHR', 'My Trades', '13'],
+    ['Withholding tax', 'XTB', 'XTB.PL', 'STOCK',
+      excelDate('2026-06-24T05:50:32Z'), -7.73, '6', 'XTB.PL PLN WHT 19%', 'My Trades', '13'],
+    ['Stock purchase', 'Realty Income', 'O.US', 'STOCK',
+      excelDate('2026-05-04T14:00:00Z'), -1500, '20', 'OPEN BUY 6.6667 @ 60', 'My Trades', '3000'],
+    ['Stock purchase', 'Realty Income', 'O.US', 'STOCK',
+      excelDate('2026-05-04T14:00:01Z'), -750, '21', 'OPEN BUY 3.3333 @ 60', 'My Trades', '3000'],
+    ['Free funds interest', '', '', '', excelDate('2026-10-03T13:14:14Z'), 0.05, '7', 'Interest', 'My Trades', ''],
+    ['Free funds interest tax', '', '', '', excelDate('2026-10-03T13:13:51Z'), -0.01, '8', 'Tax', 'My Trades', ''],
+    ['Deposit', '', '', '', excelDate('2026-01-02T10:00:00Z'), 5000, '9', 'Deposit', 'My Trades', ''],
+    ['Withdrawal', '', '', '', excelDate('2026-11-20T10:00:00Z'), -1000, '10', 'Withdrawal', 'My Trades', ''],
+    ['Transfer', '', '', '', excelDate('2026-11-19T09:32:12Z'), -2230.8, '11', 'Transfer to 52362817', 'My Trades', ''],
+  ];
+  return buildXlsx({ 'Closed Positions': closed, 'Cash Operations': cash, 'Open Positions': open });
 }
 
 describe('mapXtbTicker', () => {
@@ -138,12 +171,35 @@ describe('parseXtbFile', () => {
     expect(bySymbol('XTB.WA')[0].isInTodaysShares).toBeUndefined();
   });
 
+  it('works out the rate from all cash paid for a purchase booked in parts', () => {
+    // 2250 PLN for 10 × 60 USD: 3.75, not 2.5 from the first part alone.
+    expect(bySymbol('O')[0]).toMatchObject({ currency: 'USD', fxRate: 3.75 });
+  });
+
   it('reads the open lots', () => {
     expect(bySymbol('KRU.WA')).toMatchObject([{ side: 'buy', quantity: 3, name: 'Kruk' }]);
   });
 
   it('lists tickers of unsupported markets', () => {
     expect(file.unsupportedTickers).toEqual(['GOLD']);
+  });
+
+  it('reads the dividends, adding up the lines of one payment exactly', () => {
+    expect(file.dividends.map((item) => [item.symbol, item.gross, item.tax, item.perShare])).toEqual([
+      ['XTB.WA', 40.7, 7.73, 4.07],
+      ['ZAB.WA', 5.3, 0.8, 0.53],
+    ]);
+    expect(file.dividends[1]).toMatchObject({ currency: 'PLN', externalId: 'div:ZAB.PL|2026-07-31' });
+  });
+
+  it('reads deposits, withdrawals, transfers and interest, without signs', () => {
+    expect(file.cashOperations.map((item) => [item.type, item.amount])).toEqual([
+      ['deposit', 5000],
+      ['tax', 0.01],
+      ['interest', 0.05],
+      ['withdrawal', 2230.8],
+      ['withdrawal', 1000],
+    ]);
   });
 
   it('reads the account currency from the summary', () => {

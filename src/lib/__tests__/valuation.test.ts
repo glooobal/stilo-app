@@ -51,8 +51,9 @@ describe('peakCapital', () => {
   });
 });
 
+const now = day('2026-03-10') + 3_600_000;
+
 describe('buildPortfolioSeries', () => {
-  const now = day('2026-03-10') + 3_600_000;
 
   it('values the holdings and gives the profit since purchase', () => {
     const { positions } = buildPositions([
@@ -108,6 +109,23 @@ describe('buildPortfolioSeries', () => {
     expect(series.currentValue).toBe(200);
     // The chart does not drop the position either.
     expect(series.points.at(-2)?.value).toBe(200);
+  });
+});
+
+describe('dividends in the result', () => {
+  it('count towards the profit and the change of the range, not the capital', () => {
+    const { positions } = buildPositions([
+      makeTransaction({ id: 'b', side: 'buy', quantity: 10, price: 100, tradedAt: '2026-03-02' }),
+    ]);
+    const data = snapshot([history('TEST', [['2026-03-02', 100], ['2026-03-09', 100]])]);
+    const dividends = [
+      { gross: 50, tax: 9.5, currency: 'PLN', fxRate: null, fxCurrency: null, paidAt: '2026-03-05' },
+    ];
+    const series = buildPortfolioSeries(positions, data, 'ALL', 'PLN', null, now, dividends);
+    expect(series.dividends).toBe(40.5);
+    expect(series.currentProfit).toBe(40.5);
+    expect(series.change).toBe(40.5);
+    expect(series.points.at(-1)?.invested).toBe(1000);
   });
 });
 

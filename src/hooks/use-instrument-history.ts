@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { fromISODate } from '@/lib/date';
 import { rangeStartDate } from '@/lib/ranges';
-import { clearMarketCache } from '@/market/cache';
-import { loadDailyHistory, loadIntraday, loadLongHistory, markHistoryStale } from '@/market/history';
+import { loadDailyHistory, loadIntraday, loadLongHistory } from '@/market/history';
+import { refreshQuotes, useQuotesVersion } from '@/market/live-quotes';
 import type { ChartRange, PriceHistory, PricePoint } from '@/market/types';
 
 /** Decades of daily closes are thinned out for the chart (the last point stays). */
@@ -39,6 +39,7 @@ export function useInstrumentHistory(symbol: string, range: ChartRange) {
     error: null,
   });
   const [reloadKey, setReloadKey] = useState(0);
+  const quotesVersion = useQuotesVersion();
   const [isRefreshing, setIsRefreshing] = useState(false);
   // For an instrument, Max means its whole listing history (not the user's
   // trades), in weekly closes: decades of daily ones would be heavy to
@@ -55,10 +56,13 @@ export function useInstrumentHistory(symbol: string, range: ChartRange) {
       loadIntraday(symbol),
       isMax
         ? loadLongHistory(symbol)
-        : // One year covers Miesiąc, Rok and this year: switching between them
+        : // One year covers every range up to a year: switching between them
           // reads the same (cached) closes instead of downloading again.
           startDate
-          ? loadDailyHistory(symbol, rangeStartDate('1Y') ?? startDate)
+          ? loadDailyHistory(
+              symbol,
+              range === '5Y' ? startDate : (rangeStartDate('1Y') ?? startDate)
+            )
           : null,
     ])
       .then(([quote, history]) => {
@@ -115,11 +119,11 @@ export function useInstrumentHistory(symbol: string, range: ChartRange) {
     };
     // `range` follows `startDate`; it only tags the loaded points.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, isMax, startDate, startTime, reloadKey]);
+  }, [symbol, isMax, startDate, startTime, reloadKey, quotesVersion]);
 
   const refresh = useCallback(() => {
-    clearMarketCache();
-    markHistoryStale();
+    // Current price again; stored closes top up on their own schedule.
+    refreshQuotes();
     setIsRefreshing(true);
     setReloadKey((key) => key + 1);
   }, []);

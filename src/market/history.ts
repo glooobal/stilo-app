@@ -5,6 +5,7 @@ import {
   readStoredCloses,
   storeCloses,
 } from '@/db/price-history';
+import { storeDividendEvents } from '@/db/dividend-events';
 import { getSplitsMeta, storeSplits } from '@/db/splits';
 import { fromISODate, toISODate } from '@/lib/date';
 
@@ -115,35 +116,46 @@ export function fxSymbol(from: string, to: string) {
   return `${from}${to}=X`;
 }
 
-/** Splits are checked again after this long. */
+/** Splits and dividends are checked again after this long. */
 const SPLITS_REFRESH_MS = 12 * 60 * 60 * 1000;
 
-/** Splits found new that were already reported once (see `loadSplits`). */
-const reportedSplits = new Set<string>();
+export type EventsCheck = {
+  /** A split not known before: the trades count in different shares now. */
+  hasNewSplit: boolean;
+  /** New dividends per share: the dividends received can be worked out again. */
+  hasNewDividends: boolean;
+};
+
+/** Checks whose news was already reported once (see `loadCorporateEvents`). */
+const reportedEvents = new Set<string>();
+
+const NO_NEWS: EventsCheck = { hasNewSplit: false, hasNewDividends: false };
 
 /**
- * Makes sure the splits of a symbol since `fromDate` are stored (checked at
- * most every few hours). Returns `true` once when a new split was found: the
- * transactions then count in different shares and the stored closes were
- * dropped to be downloaded again, already adjusted.
+ * Makes sure the splits and dividends of a symbol since `fromDate` are
+ * stored (checked at most every few hours, in one request). News is
+ * reported once: a new split also drops the stored closes, so they are
+ * downloaded again, already adjusted.
  */
-export async function loadSplits(symbol: string, fromDate: string): Promise<boolean> {
-  const key = `splits:${symbol}:${fromDate}`;
-  const isNew = await cached(key, 5 * 60 * 1000, async () => {
-    reportedSplits.delete(key);
+export async function loadCorporateEvents(symbol: string, fromDate: string): Promise<EventsCheck> {
+  const key = `events:${symbol}:${fromDate}`;
+  const news = await cached(key, 5 * 60 * 1000, async (): Promise<EventsCheck> => {
+    reportedEvents.delete(key);
     const meta = getSplitsMeta(symbol);
     const isFresh =
       meta != null &&
       meta.checkedFrom <= fromDate &&
       Date.now() - meta.fetchedAt < SPLITS_REFRESH_MS &&
       meta.fetchedAt > staleBefore;
-    if (isFresh) return false;
+    if (isFresh) return NO_NEWS;
     const checkFrom = meta && meta.checkedFrom < fromDate ? meta.checkedFrom : fromDate;
-    const splits = await marketData.getSplits(symbol, checkFrom);
-    return storeSplits(symbol, splits, checkFrom);
+    const events = await marketData.getCorporateEvents(symbol, checkFrom);
+    const hasNewDividends = storeDividendEvents(symbol, events.dividends);
+    const hasNewSplit = storeSplits(symbol, events.splits, checkFrom);
+    return { hasNewSplit, hasNewDividends };
   });
-  // The cached answer is shared; a new split is reported only the first time.
-  if (!isNew || reportedSplits.has(key)) return false;
-  reportedSplits.add(key);
-  return true;
+  // The cached answer is shared; news is reported only the first time.
+  if ((!news.hasNewSplit && !news.hasNewDividends) || reportedEvents.has(key)) return NO_NEWS;
+  reportedEvents.add(key);
+  return news;
 }

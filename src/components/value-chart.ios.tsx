@@ -12,8 +12,13 @@ import type { ValueChartProps } from './value-chart.types';
 type NativeChartProps = {
   values: number[];
   secondaryValues?: number[];
+  extraSeries?: { values: number[]; color: string }[];
+  markers?: { index: number; color: string }[];
+  valueFormat?: 'money' | 'percent';
+  showsArea?: boolean;
   baseline?: number | null;
   color: string;
+  compact?: boolean;
   xLabels: { index: number; text: string }[];
   accessibilityTitle: string;
   pointLabels: string[];
@@ -39,9 +44,14 @@ export function ValueChart({
   baseline,
   secondaryValues,
   secondaryLabel,
+  extraSeries,
+  markers,
+  valueFormat = 'money',
+  showsArea = true,
   range,
   color = ChartColors.line,
   height = 180,
+  compact = false,
   onScrub,
   accessibilityLabel = 'Wykres',
   formatValue = defaultFormatValue,
@@ -69,8 +79,8 @@ export function ValueChart({
     [points, range, formatValue, secondaryValues, secondaryLabel]
   );
 
-  const dataKey = `${range}:${points.length}:${points[0]?.time}:${points.at(-1)?.time}:${secondaryValues ? 's' : ''}`;
-  const totalHeight = height + X_AXIS_HEIGHT;
+  const dataKey = `${range}:${points.length}:${points[0]?.time}:${points.at(-1)?.time}:${secondaryValues ? 's' : ''}:${extraSeries?.length ?? 0}`;
+  const totalHeight = compact ? height : height + X_AXIS_HEIGHT;
 
   return (
     <View style={{ height: totalHeight }}>
@@ -82,9 +92,14 @@ export function ValueChart({
         <NativePortfolioChart
           values={values}
           secondaryValues={secondaryValues}
+          extraSeries={extraSeries}
+          markers={markers}
+          valueFormat={valueFormat}
+          showsArea={showsArea}
           baseline={baseline}
           color={color}
-          xLabels={xLabels}
+          compact={compact}
+          xLabels={compact ? [] : xLabels}
           accessibilityTitle={accessibilityLabel}
           pointLabels={pointLabels}
           onScrub={(event) => {

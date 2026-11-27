@@ -5,7 +5,9 @@
  * `db/backup.ts`.
  */
 
-export const BACKUP_FORMAT = '12payouts-backup';
+export const BACKUP_FORMAT = 'stilo-backup';
+/** Backups made while the app was called 12payouts are still read. */
+const LEGACY_BACKUP_FORMATS = ['12payouts-backup'];
 export const BACKUP_FORMAT_VERSION = 1;
 
 export type BackupRow = Record<string, string | number | null>;
@@ -21,6 +23,10 @@ export type Backup = {
   portfolios: BackupRow[];
   instruments: BackupRow[];
   transactions: BackupRow[];
+  /** Missing in backups made before dividends (read as none). */
+  dividends: BackupRow[];
+  /** Missing in backups made before cash portfolios (read as none). */
+  cash_operations: BackupRow[];
 };
 
 export class BackupError extends Error {}
@@ -35,6 +41,8 @@ export const BACKUP_COLUMNS = {
     'color',
     'sort_order',
     'icon',
+    'is_cash',
+    'include_dividends',
     'created_at',
     'updated_at',
     'deleted_at',
@@ -68,6 +76,39 @@ export const BACKUP_COLUMNS = {
     'updated_at',
     'deleted_at',
   ],
+  dividends: [
+    'id',
+    'portfolio_id',
+    'symbol',
+    'ex_date',
+    'paid_at',
+    'quantity',
+    'per_share',
+    'gross',
+    'tax',
+    'currency',
+    'fx_rate',
+    'fx_currency',
+    'source',
+    'external_id',
+    'is_edited',
+    'created_at',
+    'updated_at',
+    'deleted_at',
+  ],
+  cash_operations: [
+    'id',
+    'portfolio_id',
+    'type',
+    'amount',
+    'date',
+    'note',
+    'source',
+    'external_id',
+    'created_at',
+    'updated_at',
+    'deleted_at',
+  ],
 } as const;
 
 export type BackupTable = keyof typeof BACKUP_COLUMNS;
@@ -77,6 +118,8 @@ const KEYS: Record<BackupTable, string> = {
   portfolios: 'id',
   instruments: 'symbol',
   transactions: 'id',
+  dividends: 'id',
+  cash_operations: 'id',
 };
 
 const REQUIRED: Record<BackupTable, string[]> = {
@@ -94,19 +137,33 @@ const REQUIRED: Record<BackupTable, string[]> = {
     'created_at',
     'updated_at',
   ],
+  dividends: [
+    'id',
+    'portfolio_id',
+    'symbol',
+    'paid_at',
+    'gross',
+    'currency',
+    'source',
+    'created_at',
+    'updated_at',
+  ],
+  cash_operations: ['id', 'portfolio_id', 'type', 'amount', 'date', 'created_at', 'updated_at'],
 };
 
 /** Values for columns a backup may lack (e.g. made before a column was added). */
 const DEFAULTS: Record<BackupTable, BackupRow> = {
-  portfolios: { account_type: 'standard', sort_order: 0 },
+  portfolios: { account_type: 'standard', sort_order: 0, is_cash: 0, include_dividends: 0 },
   instruments: { exchange: '', exchange_name: '', type: 'EQUITY' },
   transactions: { fee: 0 },
+  dividends: { tax: 0, is_edited: 0 },
+  cash_operations: { source: 'manual' },
 };
 
-/** File name like `12payouts-kopia-2026-11-25.json`. */
+/** File name like `stilo-kopia-2026-11-25.json`. */
 export function backupFileName(date = new Date()): string {
   const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  return `12payouts-kopia-${day}.json`;
+  return `stilo-kopia-${day}.json`;
 }
 
 function cleanRow(table: BackupTable, value: unknown, index: number): BackupRow {
@@ -139,11 +196,11 @@ export function parseBackup(text: string, currentSchemaVersion: number): Backup 
   try {
     data = JSON.parse(text);
   } catch {
-    throw new BackupError('To nie jest plik kopii zapasowej 12payouts.');
+    throw new BackupError('To nie jest plik kopii zapasowej Stilo.');
   }
   const object = (data ?? {}) as Record<string, unknown>;
-  if (object.format !== BACKUP_FORMAT) {
-    throw new BackupError('To nie jest plik kopii zapasowej 12payouts.');
+  if (object.format !== BACKUP_FORMAT && !LEGACY_BACKUP_FORMATS.includes(String(object.format))) {
+    throw new BackupError('To nie jest plik kopii zapasowej Stilo.');
   }
   if (typeof object.version !== 'number' || object.version > BACKUP_FORMAT_VERSION) {
     throw new BackupError('Ta kopia pochodzi z nowszej wersji aplikacji. Zaktualizuj aplikację.');
@@ -154,7 +211,9 @@ export function parseBackup(text: string, currentSchemaVersion: number): Backup 
   }
 
   const rows = (table: BackupTable) => {
-    const list = object[table];
+    // Dividends came later: an older backup has none.
+    const isNewer = table === 'dividends' || table === 'cash_operations';
+    const list = isNewer && object[table] == null ? [] : object[table];
     if (!Array.isArray(list)) throw new BackupError('Uszkodzona kopia: brak danych.');
     return list.map((row, index) => cleanRow(table, row, index));
   };
@@ -167,14 +226,21 @@ export function parseBackup(text: string, currentSchemaVersion: number): Backup 
     portfolios: rows('portfolios'),
     instruments: rows('instruments'),
     transactions: rows('transactions'),
+    dividends: rows('dividends'),
+    cash_operations: rows('cash_operations'),
   };
 
   // Every transaction must point at a portfolio and an instrument of the backup.
   const portfolioIds = new Set(backup.portfolios.map((row) => row.id));
   const symbols = new Set(backup.instruments.map((row) => row.symbol));
-  for (const row of backup.transactions) {
+  for (const row of [...backup.transactions, ...backup.dividends]) {
     if (!portfolioIds.has(row.portfolio_id) || !symbols.has(row.symbol)) {
       throw new BackupError('Uszkodzona kopia: operacja bez portfela lub instrumentu.');
+    }
+  }
+  for (const row of backup.cash_operations) {
+    if (!portfolioIds.has(row.portfolio_id)) {
+      throw new BackupError('Uszkodzona kopia: wpłata lub wypłata bez portfela.');
     }
   }
   return backup;

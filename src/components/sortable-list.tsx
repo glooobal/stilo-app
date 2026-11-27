@@ -46,6 +46,12 @@ type SortableListProps<T> = {
   itemHeight: number;
   /** Left inset of the separator lines between rows. */
   separatorInset?: number;
+  /**
+   * `rows`: rows in one panel, with separators. `cards`: every item draws
+   * its own panel (no background or separators here); `itemHeight` then
+   * includes the space below each card.
+   */
+  appearance?: 'rows' | 'cards';
   /** New order of ids after a drag. */
   onReorder: (orderedIds: string[]) => void;
   /** Lets the screen stop scrolling while a row is dragged. */
@@ -63,6 +69,7 @@ export function SortableList<T>({
   renderItem,
   itemHeight,
   separatorInset = 16,
+  appearance = 'rows',
   onReorder,
   onDragStateChange,
 }: SortableListProps<T>) {
@@ -96,6 +103,7 @@ export function SortableList<T>({
             positions={positions}
             itemHeight={itemHeight}
             separatorInset={separatorInset}
+            isCard={appearance === 'cards'}
             onDragStart={handleDragStart}
             onDrop={handleDrop}>
             {renderItem(item)}
@@ -113,6 +121,7 @@ type SortableItemProps = {
   positions: SharedValue<Positions>;
   itemHeight: number;
   separatorInset: number;
+  isCard: boolean;
   onDragStart: () => void;
   onDrop: (positions: Positions) => void;
   children: ReactNode;
@@ -125,6 +134,7 @@ function SortableItem({
   positions,
   itemHeight,
   separatorInset,
+  isCard,
   onDragStart,
   onDrop,
   children,
@@ -182,12 +192,15 @@ function SortableItem({
 
   return (
     <GestureDetector gesture={pan}>
-      <Animated.View style={[styles.item, { height: itemHeight }, itemStyle]}>
+      <Animated.View
+        style={[styles.item, !isCard && styles.rowBackground, { height: itemHeight }, itemStyle]}>
         {children}
-        <Animated.View
-          pointerEvents="none"
-          style={[styles.separator, { left: separatorInset }, separatorStyle]}
-        />
+        {isCard ? null : (
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.separator, { left: separatorInset }, separatorStyle]}
+          />
+        )}
       </Animated.View>
     </GestureDetector>
   );
@@ -198,10 +211,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    backgroundColor: Colors.card,
     shadowColor: '#000000',
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
+  },
+  rowBackground: {
+    backgroundColor: Colors.card,
   },
   separator: {
     position: 'absolute',

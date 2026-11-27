@@ -84,6 +84,17 @@ export function formatPrice(value: number, currency: string, maxFractionDigits =
   return formatCurrency(value, currency, Math.max(2, Math.min(decimalPlaces(value), maxFractionDigits)));
 }
 
+/**
+ * A downloaded market price (a chart point, the current quote). Quotes have
+ * at most 4 meaningful decimals; the digits after them are noise of how the
+ * provider stores and adjusts prices (e.g. 60.36000061035156 for 60,36, or
+ * old closes divided after a split), not part of the price. Display only:
+ * calculations keep the value as it is.
+ */
+export function formatQuote(value: number, currency: string): string {
+  return formatPrice(Number(value.toFixed(4)), currency);
+}
+
 export function formatPercent(ratio: number, signed = true): string {
   return new Intl.NumberFormat('pl-PL', {
     style: 'percent',
@@ -102,4 +113,30 @@ export function formatSignedMoney(value: number, currency: string): string {
 export function formatProfit(amount: number, ratio: number | null, currency: string): string {
   const money = formatSignedMoney(amount, currency);
   return ratio == null ? money : `${money} (${formatPercent(ratio)})`;
+}
+
+/**
+ * Exact sum of decimal amounts (e.g. dividend lines of one payment from a
+ * broker file): 4.24 + 1.06 + 9.54 + 5.3 is 20.14, not 20.140000000000001.
+ * Adds them as whole numbers of their smallest decimal place, so nothing is
+ * rounded; values with more than 15 significant digits fall back to `+`.
+ */
+export function sumExact(values: readonly number[]): number {
+  const parts = values.map((value) => toExactString(value));
+  const places = Math.max(0, ...parts.map((part) => part.split('.')[1]?.length ?? 0));
+  try {
+    let total = BigInt(0);
+    for (const part of parts) {
+      const [integer, fraction = ''] = part.replace('-', '').split('.');
+      const digits = BigInt(integer + fraction.padEnd(places, '0'));
+      total += part.startsWith('-') ? -digits : digits;
+    }
+    const negative = total < BigInt(0);
+    const text = (negative ? -total : total).toString().padStart(places + 1, '0');
+    const whole = text.slice(0, text.length - places);
+    const fraction = places > 0 ? `.${text.slice(text.length - places)}` : '';
+    return Number(`${negative ? '-' : ''}${whole}${fraction}`);
+  } catch {
+    return values.reduce((sum, value) => sum + value, 0);
+  }
 }

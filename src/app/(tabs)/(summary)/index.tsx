@@ -1,3 +1,5 @@
+import { router } from 'expo-router';
+import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AddPortfolioCard } from '@/components/add-portfolio-card';
@@ -6,12 +8,23 @@ import { PortfolioDashboard } from '@/components/portfolio-dashboard';
 import { TabScreen } from '@/components/tab-screen';
 import { Colors } from '@/constants/colors';
 import { usePortfolioDashboard } from '@/hooks/use-portfolio-dashboard';
+import { isOnboardingDone, markOnboardingDone } from '@/lib/onboarding';
 import { formatSyncStatus } from '@/lib/quotes-status';
 
 /** All portfolios together, valued in the summary currency (Settings). */
 export default function SummaryScreen() {
   const dashboard = usePortfolioDashboard();
   const hasPortfolios = dashboard.portfolios.length > 0;
+
+  // First launch: the welcome. Someone who already has portfolios (from
+  // before onboarding existed, or a restored backup) does not need it.
+  useEffect(() => {
+    if (isOnboardingDone()) return;
+    if (hasPortfolios) markOnboardingDone();
+    else router.push('/onboarding');
+    // Only on the first render of the app.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>

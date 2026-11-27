@@ -28,6 +28,8 @@ export function createBackup(appVersion: string | null): Backup {
     portfolios: read('portfolios'),
     instruments: read('instruments'),
     transactions: read('transactions'),
+    dividends: read('dividends'),
+    cash_operations: read('cash_operations'),
   };
 }
 
@@ -53,7 +55,13 @@ export function restoreBackup(backup: Backup): RestoreResult {
   let updated = 0;
   database.withTransactionSync(() => {
     // Parents first: transactions refer to portfolios and instruments.
-    for (const table of ['instruments', 'portfolios', 'transactions'] as const) {
+    for (const table of [
+      'instruments',
+      'portfolios',
+      'transactions',
+      'dividends',
+      'cash_operations',
+    ] as const) {
       const columns = BACKUP_COLUMNS[table];
       const key = backupKey(table);
       const values = (row: BackupRow) => columns.map((column) => row[column] ?? null);

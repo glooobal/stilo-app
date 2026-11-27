@@ -14,22 +14,6 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   ikze: 'IKZE',
 };
 
-/** Colors to choose from for the portfolio icon. */
-export const PORTFOLIO_COLORS = [
-  '#007AFF',
-  '#34C759',
-  '#FF9500',
-  '#FF3B30',
-  '#FF2D55',
-  '#AF52DE',
-  '#5856D6',
-  '#30B0C7',
-  '#A2845E',
-  '#8E8E93',
-] as const;
-
-export const DEFAULT_PORTFOLIO_COLOR = PORTFOLIO_COLORS[0];
-
 /** SF Symbols to choose from for the portfolio icon. */
 export const PORTFOLIO_ICONS = ['wallet.bifold.fill', 'creditcard', 'dollarsign', 'bitcoinsign'] as const;
 
@@ -43,9 +27,15 @@ export type Portfolio = {
   /** Currency the portfolio is valued in. */
   baseCurrency: string;
   accountType: AccountType;
-  /** Background of the portfolio icon (hex). */
-  color: string;
   icon: PortfolioIcon;
+  /**
+   * Keeps the cash of the account: deposits and withdrawals are entered,
+   * purchases take from the balance and sales, dividends and interest add
+   * to it. Chosen when the portfolio is created; cannot be changed later.
+   */
+  isCash: boolean;
+  /** The result of each position includes its dividends (net). */
+  includeDividends: boolean;
   createdAt: string;
 };
 
@@ -53,8 +43,8 @@ export type PortfolioInput = {
   name: string;
   baseCurrency: string;
   accountType: AccountType;
-  color: string;
   icon: PortfolioIcon;
+  includeDividends: boolean;
 };
 
 /** Currencies a portfolio can be valued in. */
@@ -65,12 +55,14 @@ type PortfolioRow = {
   name: string;
   base_currency: string;
   account_type: string;
-  color: string | null;
   icon: string | null;
+  is_cash: number;
+  include_dividends: number;
   created_at: string;
 };
 
-const COLUMNS = 'id, name, base_currency, account_type, color, icon, created_at';
+const COLUMNS =
+  'id, name, base_currency, account_type, icon, is_cash, include_dividends, created_at';
 
 function toPortfolio(row: PortfolioRow): Portfolio {
   return {
@@ -80,7 +72,8 @@ function toPortfolio(row: PortfolioRow): Portfolio {
     accountType: (ACCOUNT_TYPES as readonly string[]).includes(row.account_type)
       ? (row.account_type as AccountType)
       : 'standard',
-    color: row.color ?? DEFAULT_PORTFOLIO_COLOR,
+    isCash: row.is_cash === 1,
+    includeDividends: row.include_dividends === 1,
     icon: (PORTFOLIO_ICONS as readonly string[]).includes(row.icon ?? '')
       ? (row.icon as PortfolioIcon)
       : DEFAULT_PORTFOLIO_ICON,
@@ -106,7 +99,7 @@ export function getPortfolio(id: string): Portfolio | null {
   return row ? toPortfolio(row) : null;
 }
 
-export function createPortfolio(input: PortfolioInput): string {
+export function createPortfolio(input: PortfolioInput & { isCash: boolean }): string {
   const db = getDatabase();
   const id = createId();
   const timestamp = nowTimestamp();
@@ -116,14 +109,16 @@ export function createPortfolio(input: PortfolioInput): string {
   );
   db.runSync(
     `INSERT INTO portfolios
-       (id, name, base_currency, account_type, color, icon, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, base_currency, account_type, icon, is_cash, include_dividends, sort_order,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.name.trim(),
     input.baseCurrency,
     input.accountType,
-    input.color,
     input.icon,
+    input.isCash ? 1 : 0,
+    input.includeDividends ? 1 : 0,
     last?.next ?? 0,
     timestamp,
     timestamp
@@ -135,13 +130,14 @@ export function createPortfolio(input: PortfolioInput): string {
 export function updatePortfolio(id: string, input: PortfolioInput) {
   getDatabase().runSync(
     `UPDATE portfolios
-     SET name = ?, base_currency = ?, account_type = ?, color = ?, icon = ?, updated_at = ?
+     SET name = ?, base_currency = ?, account_type = ?, icon = ?, include_dividends = ?,
+         updated_at = ?
      WHERE id = ?`,
     input.name.trim(),
     input.baseCurrency,
     input.accountType,
-    input.color,
     input.icon,
+    input.includeDividends ? 1 : 0,
     nowTimestamp(),
     id
   );

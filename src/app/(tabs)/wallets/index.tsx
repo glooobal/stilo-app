@@ -4,7 +4,6 @@ import { StyleSheet, View } from 'react-native';
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
 import { AddPortfolioCard } from '@/components/add-portfolio-card';
-import { Card } from '@/components/card';
 import { PORTFOLIO_ROW_HEIGHT, PortfolioListRow } from '@/components/portfolio-list-row';
 import { SortableList } from '@/components/sortable-list';
 import { TabScreen } from '@/components/tab-screen';
@@ -38,30 +37,28 @@ export default function WalletsScreen() {
           {portfolios.length === 0 ? (
             <AddPortfolioCard />
           ) : (
-            <Card>
-                <SortableList
-                  items={portfolios}
-                  keyExtractor={(portfolio) => portfolio.id}
-                  itemHeight={PORTFOLIO_ROW_HEIGHT}
-                  separatorInset={68}
-                  onReorder={reorderPortfolios}
-                  onDragStateChange={(dragging) => {
-                    if (dragging) openRowRef.current?.close();
-                    setIsDragging(dragging);
+            <SortableList
+              items={portfolios}
+              keyExtractor={(portfolio) => portfolio.id}
+              itemHeight={PORTFOLIO_ROW_HEIGHT}
+              appearance="cards"
+              onReorder={reorderPortfolios}
+              onDragStateChange={(dragging) => {
+                if (dragging) openRowRef.current?.close();
+                setIsDragging(dragging);
+              }}
+              renderItem={(portfolio) => (
+                <PortfolioListRow
+                  portfolio={portfolio}
+                  onOpen={(methods) => {
+                    if (openRowRef.current && openRowRef.current !== methods) {
+                      openRowRef.current.close();
+                    }
+                    openRowRef.current = methods;
                   }}
-                  renderItem={(portfolio) => (
-                    <PortfolioListRow
-                      portfolio={portfolio}
-                      onOpen={(methods) => {
-                        if (openRowRef.current && openRowRef.current !== methods) {
-                          openRowRef.current.close();
-                        }
-                        openRowRef.current = methods;
-                      }}
-                    />
-                  )}
                 />
-            </Card>
+              )}
+            />
           )}
         </View>
       </TabScreen>

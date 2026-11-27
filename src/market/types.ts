@@ -24,7 +24,7 @@ export type PriceQuote = {
   date: string;
 };
 
-export type ChartRange = '1D' | '1M' | 'YTD' | '1Y' | 'ALL';
+export type ChartRange = '1D' | '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '5Y' | 'ALL';
 
 export type PricePoint = {
   /** Unix time in milliseconds. */
@@ -73,9 +73,24 @@ export interface MarketDataProvider {
    * for the "Max" chart of an instrument.
    */
   getLongHistory(symbol: string, signal?: AbortSignal): Promise<PriceHistory>;
-  /** Stock splits since `fromDate` (`YYYY-MM-DD`), oldest first. */
-  getSplits(symbol: string, fromDate: string, signal?: AbortSignal): Promise<StockSplit[]>;
+  /**
+   * Stock splits and dividends per share since `fromDate` (`YYYY-MM-DD`),
+   * oldest first, in one request.
+   */
+  getCorporateEvents(
+    symbol: string,
+    fromDate: string,
+    signal?: AbortSignal
+  ): Promise<{ splits: StockSplit[]; dividends: DividendEvent[] }>;
 }
+
+export type DividendEvent = {
+  /** Ex-dividend date (shares held the day before are entitled), `YYYY-MM-DD`. */
+  exDate: string;
+  /** Gross dividend per share, in `currency` (adjusted for later splits). */
+  amount: number;
+  currency: string;
+};
 
 export type StockSplit = {
   /** First trading day after the split, `YYYY-MM-DD`. */

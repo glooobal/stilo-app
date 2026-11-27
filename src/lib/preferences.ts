@@ -18,6 +18,15 @@ export function readPreference<T extends string>(
   }
 }
 
+/** Free text preference, `null` when it was never saved. */
+export function readTextPreference(key: string): string | null {
+  try {
+    return Storage.getItemSync(key);
+  } catch {
+    return null;
+  }
+}
+
 export function writePreference(key: string, value: string) {
   try {
     Storage.setItemSync(key, value);

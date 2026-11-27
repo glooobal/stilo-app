@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "12payouts",
+    "name": "Stilo",
     "slug": "12payouts",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -35,7 +35,8 @@
           "imageWidth": 76
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,

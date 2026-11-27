@@ -1,6 +1,6 @@
 import { decodeYahooPrice } from '@/market/yahoo';
 
-import { formatDecimalInput, formatMoney, formatPrice, toExactString } from '../number';
+import { formatDecimalInput, formatMoney, formatPrice, formatQuote, toExactString } from '../number';
 
 // Intl puts a no-break space before the currency.
 const plain = (text: string) => text.replace(/\s/g, ' ');
@@ -60,5 +60,13 @@ describe('decodeYahooPrice', () => {
   it('leaves other values untouched', () => {
     expect(decodeYahooPrice(0.1)).toBe(0.1);
     expect(decodeYahooPrice(27.809999)).toBe(27.809999);
+  });
+});
+
+describe('formatQuote', () => {
+  it('drops the storage noise of downloaded prices', () => {
+    expect(formatQuote(60.36000061035156, 'PLN')).toBe(formatPrice(60.36, 'PLN'));
+    expect(formatQuote(2.1580000400543213, 'PLN')).toBe(formatPrice(2.158, 'PLN'));
+    expect(formatQuote(0.0377, 'USD')).toBe(formatPrice(0.0377, 'USD'));
   });
 });

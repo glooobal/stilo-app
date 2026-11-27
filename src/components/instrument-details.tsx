@@ -2,9 +2,9 @@ import { Stack } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Colors } from '@/constants/colors';
+import { ChartColors, Colors } from '@/constants/colors';
 import { useInstrumentHistory } from '@/hooks/use-instrument-history';
-import { usePortfolios } from '@/hooks/use-portfolio';
+import { usePortfolioData, usePortfolios } from '@/hooks/use-portfolio';
 import { usePortfolioValuation } from '@/hooks/use-portfolio-valuation';
 import { formatDisplayDate, formatPointDate, toISODate } from '@/lib/date';
 import { openTransactionEditor } from '@/lib/navigation';
@@ -13,9 +13,14 @@ import {
   formatDecimalInput,
   formatMoney,
   formatPrice,
+  formatPercent,
   formatProfit,
+  formatQuote,
+  formatSignedMoney,
 } from '@/lib/number';
 import type { Position, SaleResult } from '@/lib/positions';
+import { tradeMarkers, type MarkerKind } from '@/lib/chart-markers';
+import { resultBreakdown } from '@/lib/position-result';
 import { RANGE_CHANGE_LABELS } from '@/lib/ranges';
 import { useSummaryCurrency } from '@/lib/settings';
 import { sortNewestFirst } from '@/lib/transactions';
@@ -34,6 +39,14 @@ import { ValueChart } from './value-chart';
  * held) it, the position and its transactions. Used for positions and for
  * instruments opened from search.
  */
+/** Dots of the user's trades on the price chart. */
+const MARKER_COLORS: Record<MarkerKind, string> = {
+  buy: ChartColors.profit,
+  sell: ChartColors.loss,
+  both: '#FF9500',
+  dividend: '#AF52DE',
+};
+
 export function InstrumentDetails({
   instrument,
   position,
@@ -69,10 +82,11 @@ export function InstrumentDetails({
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
   const priceCurrency = instrument.currency || quote?.currency || '';
   const formatChartPrice = useCallback(
-    (value: number) => formatPrice(value, priceCurrency),
+    (value: number) => formatQuote(value, priceCurrency),
     [priceCurrency]
   );
   const scrubbed = scrubIndex != null ? points[scrubIndex] : undefined;
+
   const change = marketPrice != null && baseline ? marketPrice - baseline : null;
   const changeRatio = change != null && baseline ? change / baseline : null;
   const isPositive = (change ?? 0) >= 0;
@@ -91,10 +105,65 @@ export function InstrumentDetails({
     summaryCurrency;
   const isForeign = position != null && currency !== '' && currency !== baseCurrency;
   const valuedPositions = useMemo(() => (position ? [position] : []), [position]);
-  const { valuations } = usePortfolioValuation(valuedPositions, '1D', baseCurrency, {
-    withHistory: false,
-  });
+  const { dividends: allDividends } = usePortfolioData(portfolioId);
+  const dividends = useMemo(
+    () => allDividends.filter((dividend) => dividend.symbol === instrument.symbol),
+    [allDividends, instrument.symbol]
+  );
+  // The same result as on the positions list: with the dividends of the
+  // portfolios set to include them.
+  const positionDividendPortfolios = useMemo(
+    () => new Set(portfolios.filter((item) => item.includeDividends).map((item) => item.id)),
+    [portfolios]
+  );
+  const { valuations, dividendAmounts } = usePortfolioValuation(
+    valuedPositions,
+    '1D',
+    baseCurrency,
+    { withHistory: false, dividends, positionDividendPortfolios }
+  );
+
+  // The user's trades and dividends as dots on the line (not on the one-day chart: trades
+  // have a date, not a time).
+  const markers = useMemo(
+    () =>
+      position && displayedRange !== '1D'
+        ? tradeMarkers(
+            points.map((point) => point.time),
+            position.transactions,
+            // Dividends of this position, net, in the portfolio currency.
+            dividends.map((dividend) => {
+              const amounts = dividendAmounts.get(dividend.id);
+              return {
+                paidAt: dividend.paidAt,
+                label: amounts
+                  ? `Dywidenda ${formatMoney(amounts.net, baseCurrency)}`
+                  : 'Dywidenda',
+              };
+            })
+          )
+        : [],
+    [position, points, displayedRange, dividends, dividendAmounts, baseCurrency]
+  );
+  const chartMarkers = useMemo(
+    () => markers.map((marker) => ({ index: marker.index, color: MARKER_COLORS[marker.kind] })),
+    [markers]
+  );
+  const scrubbedTrades =
+    scrubIndex != null ? markers.find((marker) => marker.index === scrubIndex)?.label : undefined;
+  let dividendsNet: number | null = dividends.length > 0 ? 0 : null;
+  for (const dividend of dividends) {
+    const amounts = dividendAmounts.get(dividend.id);
+    if (!amounts || dividendsNet == null) dividendsNet = null;
+    else dividendsNet += amounts.net;
+  }
   const baseValuation = valuations.get(instrument.symbol);
+  // Dividends received relative to what the shares held now cost (both in
+  // the portfolio currency): how much of the investment has come back.
+  const dividendsRatio =
+    dividendsNet != null && baseValuation?.baseCost ? dividendsNet / baseValuation.baseCost : null;
+  const breakdown = quantity > 0 ? resultBreakdown(baseValuation, openCost) : null;
+  const tone = (amount: number) => (amount < 0 ? 'negative' : amount > 0 ? 'positive' : undefined);
   const realized = isForeign ? (baseValuation?.baseRealizedProfit ?? null) : (position?.realizedProfit ?? null);
   const realizedCurrency = isForeign ? baseCurrency : currency;
 
@@ -121,7 +190,7 @@ export function InstrumentDetails({
         ['Koszt zakupu', quantity ? formatMoney(openCost, currency) : '—'],
         ['Wartość', value != null && quantity ? formatMoney(value, currency) : '—'],
         [
-          'Zysk niezrealizowany',
+          'Zysk aktualny',
           unrealized != null ? formatProfit(unrealized, unrealizedRatio, currency) : '—',
           unrealized != null ? (unrealized < 0 ? 'negative' : 'positive') : undefined,
         ],
@@ -154,6 +223,53 @@ export function InstrumentDetails({
                     : 'positive'
                   : undefined,
               ],
+            ] satisfies [string, string, ('positive' | 'negative')?][])
+          : []),
+        // The result from the list, and what it is made of.
+        ...(breakdown && (isForeign || breakdown.dividends !== 0)
+          ? ([
+              [
+                `Wynik od zakupu (${baseCurrency})`,
+                formatProfit(breakdown.total, breakdown.ratio, baseCurrency),
+                tone(breakdown.total),
+              ],
+              ['  z ceny', formatSignedMoney(breakdown.price, baseCurrency), tone(breakdown.price)],
+              ...(isForeign
+                ? ([
+                    [
+                      '  z kursu walut',
+                      formatSignedMoney(breakdown.currency, baseCurrency),
+                      tone(breakdown.currency),
+                    ],
+                  ] satisfies [string, string, ('positive' | 'negative')?][])
+                : []),
+              ...(breakdown.dividends !== 0
+                ? ([
+                    [
+                      '  z dywidend',
+                      formatSignedMoney(breakdown.dividends, baseCurrency),
+                      tone(breakdown.dividends),
+                    ],
+                  ] satisfies [string, string, ('positive' | 'negative')?][])
+                : []),
+            ] satisfies [string, string, ('positive' | 'negative')?][])
+          : []),
+        ...(dividends.length > 0
+          ? ([
+              [
+                `Wypłacone dywidendy (${baseCurrency})`,
+                dividendsNet != null ? formatProfit(dividendsNet, null, baseCurrency) : '—',
+                dividendsNet != null && dividendsNet > 0 ? 'positive' : undefined,
+              ],
+              ...(dividendsRatio != null
+                ? ([
+                    [
+                      'Dywidendy do kosztu zakupu',
+                      formatPercent(dividendsRatio),
+                      dividendsRatio > 0 ? 'positive' : undefined,
+                    ],
+                  ] satisfies [string, string, ('positive' | 'negative')?][])
+                : []),
             ] satisfies [string, string, ('positive' | 'negative')?][])
           : []),
         [
@@ -193,14 +309,19 @@ export function InstrumentDetails({
           <View style={styles.priceBlock}>
             <Text style={styles.price}>
               {scrubbed
-                ? formatPrice(scrubbed.value, currency)
+                ? formatQuote(scrubbed.value, currency)
                 : price != null
-                  ? formatPrice(price, currency)
+                  ? isTradePrice
+                    ? formatPrice(price, currency)
+                    : formatQuote(price, currency)
                   : '—'}
             </Text>
             {scrubbed ? (
               <Text style={styles.changeRange}>
                 {formatPointDate(scrubbed.time, displayedRange === '1D')}
+                {scrubbedTrades ? (
+                  <Text style={styles.scrubTrades}>{` · ${scrubbedTrades}`}</Text>
+                ) : null}
               </Text>
             ) : isTradePrice && baseValuation?.priceTime != null ? (
               <Text style={styles.staleNote}>
@@ -220,6 +341,8 @@ export function InstrumentDetails({
                 points={points}
                 baseline={baseline}
                 range={displayedRange}
+                color={ChartColors.line}
+                markers={chartMarkers}
                 onScrub={setScrubIndex}
                 accessibilityLabel={`Wykres ceny ${instrument.name}`}
                 formatValue={formatChartPrice}
@@ -232,6 +355,34 @@ export function InstrumentDetails({
               </View>
             )}
           </View>
+          {markers.length > 0 ? (
+            <View style={styles.markerLegend} accessible={false}>
+              {markers.some((marker) => marker.kind === 'buy') ? (
+                <View style={styles.markerLegendItem}>
+                  <View style={[styles.markerDot, { backgroundColor: MARKER_COLORS.buy }]} />
+                  <Text style={styles.markerLegendText}>Kupno</Text>
+                </View>
+              ) : null}
+              {markers.some((marker) => marker.kind === 'sell') ? (
+                <View style={styles.markerLegendItem}>
+                  <View style={[styles.markerDot, { backgroundColor: MARKER_COLORS.sell }]} />
+                  <Text style={styles.markerLegendText}>Sprzedaż</Text>
+                </View>
+              ) : null}
+              {markers.some((marker) => marker.kind === 'dividend') ? (
+                <View style={styles.markerLegendItem}>
+                  <View style={[styles.markerDot, { backgroundColor: MARKER_COLORS.dividend }]} />
+                  <Text style={styles.markerLegendText}>Dywidenda</Text>
+                </View>
+              ) : null}
+              {markers.some((marker) => marker.kind === 'both') ? (
+                <View style={styles.markerLegendItem}>
+                  <View style={[styles.markerDot, { backgroundColor: MARKER_COLORS.both }]} />
+                  <Text style={styles.markerLegendText}>Kupno i sprzedaż</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
           <View style={styles.picker}>
             <RangePicker value={range} onChange={setRange} />
           </View>
@@ -285,7 +436,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.groupedBackground,
   },
   content: {
-    gap: 20,
+    gap: 28,
     paddingTop: 8,
     paddingBottom: 32,
   },
@@ -345,6 +496,30 @@ const styles = StyleSheet.create({
   },
   picker: {
     padding: 16,
+  },
+  scrubTrades: {
+    color: Colors.label,
+    fontWeight: '600',
+  },
+  markerLegend: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    paddingTop: 6,
+  },
+  markerLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  markerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  markerLegendText: {
+    fontSize: 12,
+    color: Colors.secondaryLabel,
   },
   statRow: {
     flexDirection: 'row',

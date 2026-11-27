@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 14,
   },
   pressed: {
     backgroundColor: Colors.fill,

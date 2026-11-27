@@ -1,5 +1,6 @@
 import { openDatabaseSync, type SQLiteDatabase } from 'expo-sqlite';
 
+// Kept from before the app was renamed to Stilo: renaming it would lose the data.
 const DATABASE_NAME = '12payouts.db';
 
 /**
@@ -108,6 +109,68 @@ const MIGRATIONS: string[] = [
     fetched_at INTEGER NOT NULL
   );
   ALTER TABLE transactions ADD COLUMN fee_currency TEXT;
+  `,
+  // v7: dividends. `dividends` holds what the user received (worked out from
+  // the holdings, entered by hand or imported); `dividend_events` the
+  // dividends per share announced by the companies (downloaded).
+  `
+  CREATE TABLE dividends (
+    id TEXT PRIMARY KEY NOT NULL,
+    portfolio_id TEXT NOT NULL REFERENCES portfolios (id),
+    symbol TEXT NOT NULL REFERENCES instruments (symbol),
+    ex_date TEXT,
+    paid_at TEXT NOT NULL,
+    quantity REAL,
+    per_share REAL,
+    gross REAL NOT NULL CHECK (gross >= 0),
+    tax REAL NOT NULL DEFAULT 0 CHECK (tax >= 0),
+    currency TEXT NOT NULL,
+    fx_rate REAL,
+    fx_currency TEXT,
+    source TEXT NOT NULL,
+    external_id TEXT,
+    is_edited INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX dividends_portfolio_symbol ON dividends (portfolio_id, symbol);
+  -- Also over deleted rows: a dividend the user removed is not brought back.
+  CREATE UNIQUE INDEX dividends_external_id
+    ON dividends (portfolio_id, source, external_id)
+    WHERE external_id IS NOT NULL;
+  CREATE TABLE dividend_events (
+    symbol TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL,
+    PRIMARY KEY (symbol, ex_date)
+  );
+  `,
+  // v8: cash portfolios (deposits, withdrawals and interest kept as cash
+  // operations; the balance follows every trade) and whether dividends
+  // count towards the result of positions. Portfolio colors are no longer
+  // used (the column stays, unread).
+  `
+  ALTER TABLE portfolios ADD COLUMN is_cash INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE portfolios ADD COLUMN include_dividends INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE cash_operations (
+    id TEXT PRIMARY KEY NOT NULL,
+    portfolio_id TEXT NOT NULL REFERENCES portfolios (id),
+    type TEXT NOT NULL CHECK (type IN ('deposit', 'withdrawal', 'interest', 'tax')),
+    amount REAL NOT NULL CHECK (amount > 0),
+    date TEXT NOT NULL,
+    note TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    external_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX cash_operations_portfolio ON cash_operations (portfolio_id, date);
+  CREATE UNIQUE INDEX cash_operations_external_id
+    ON cash_operations (portfolio_id, source, external_id)
+    WHERE external_id IS NOT NULL;
   `,
 ];
 

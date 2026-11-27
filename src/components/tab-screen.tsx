@@ -33,6 +33,8 @@ export function TabScreen({
 }: TabScreenProps) {
   return (
     <>
+      {/* The plain title also names the back button of screens opened from here. */}
+      <Stack.Screen options={{ title }} />
       {subtitle ? (
         <Stack.Title asChild>
           <HeaderTitle title={title} subtitle={subtitle} />

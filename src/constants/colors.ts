@@ -22,6 +22,8 @@ export const Colors = {
   positive: system('systemGreen', '#34C759'),
   negative: system('systemRed', '#FF3B30'),
   warning: system('systemOrange', '#FF9500'),
+  /** Background of portfolio icons (always gray, with a white symbol). */
+  iconBackground: system('systemGray', '#8E8E93'),
 };
 
 /** Plain hex values for native views that need a concrete color (charts). */

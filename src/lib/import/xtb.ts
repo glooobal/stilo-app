@@ -1,7 +1,15 @@
 import type { InstrumentType } from '@/market/types';
 
 import { excelDateToTime, readWorkbook, SpreadsheetError, type Cell } from '../xlsx';
-import type { Broker, ImportedTrade, ImportFile } from './types';
+import { toISODate } from '../date';
+import { sumExact } from '../number';
+import type {
+  Broker,
+  ImportedCashOperation,
+  ImportedDividend,
+  ImportedTrade,
+  ImportFile,
+} from './types';
 
 /**
  * XTB ticker suffix → market data suffix and the currency of the market.
@@ -121,6 +129,21 @@ function readCashOperations(sheet: Cell[][] | undefined) {
   return { purchases, sales };
 }
 
+/**
+ * All cash operations within a few minutes of a moment, added up: XTB can
+ * book one purchase in several parts (e.g. fills of one order).
+ */
+function totalNear(operations: CashOperation[] | undefined, at: number): number | null {
+  let total = 0;
+  let found = false;
+  for (const operation of operations ?? []) {
+    if (Math.abs(operation.time - at) > 5 * 60_000) continue;
+    total += operation.amount;
+    found = true;
+  }
+  return found ? total : null;
+}
+
 /** The cash operation closest in time (within a few minutes). */
 function nearest(operations: CashOperation[] | undefined, at: number): CashOperation | null {
   if (!operations?.length) return null;
@@ -186,6 +209,125 @@ function accountCurrencyOf(
     if (ACCOUNT_CURRENCIES.has(token)) return token;
   }
   return null;
+}
+
+const DIVIDEND_TYPES = new Set(['Dividend', 'Dividend from foreign company on PL market']);
+const DIVIDEND_TAX_TYPES = new Set([
+  'Withholding tax',
+  'Tax from dividend from foreign company on PL market',
+]);
+
+/**
+ * Dividends from the cash operations: XTB books every lot separately (with
+ * its tax line), so the lines of one instrument on one day are added up
+ * exactly into one payment. Amounts are in the account currency.
+ */
+function readDividends(
+  sheet: Cell[][] | undefined,
+  accountCurrency: string | null,
+  instrumentOf: (ticker: string, category: string) => { symbol: string } | null
+): ImportedDividend[] {
+  const cash = table(sheet, 'Type');
+  if (!cash || !accountCurrency) return [];
+  type Payment = {
+    ticker: string;
+    symbol: string;
+    name: string;
+    time: number;
+    gross: number[];
+    tax: number[];
+    perShare: number | null;
+  };
+  const payments = new Map<string, Payment>();
+  const seen = new Set<string>();
+
+  for (const row of cash.rows) {
+    const type = text(cash.column(row, 'Type'));
+    const isDividend = DIVIDEND_TYPES.has(type);
+    if (!isDividend && !DIVIDEND_TAX_TYPES.has(type)) continue;
+    const operationId = text(cash.column(row, 'ID'));
+    if (operationId && seen.has(operationId)) continue;
+    if (operationId) seen.add(operationId);
+
+    const ticker = text(cash.column(row, 'Ticker'));
+    const at = time(cash.column(row, 'Time'));
+    const amount = number(cash.column(row, 'Amount'));
+    if (!ticker || at == null || amount == null) continue;
+    const instrument = instrumentOf(ticker, text(cash.column(row, 'Category')));
+    if (!instrument) continue;
+
+    const key = `${ticker}|${toISODate(new Date(at))}`;
+    const payment = payments.get(key) ?? {
+      ticker,
+      symbol: instrument.symbol,
+      name: text(cash.column(row, 'Instrument')) || ticker,
+      time: at,
+      gross: [],
+      tax: [],
+      perShare: null,
+    };
+    if (isDividend) {
+      payment.gross.push(amount);
+      // "XTB.PL PLN 4.0700/ SHR": the dividend per share and its currency.
+      const match = /\b([A-Z]{3})\s+([\d.]+)\s*\/\s*SHR/.exec(text(cash.column(row, 'Comment')));
+      if (match && match[1] === accountCurrency) payment.perShare = Number(match[2]);
+    } else {
+      payment.tax.push(Math.abs(amount));
+    }
+    payments.set(key, payment);
+  }
+
+  const dividends: ImportedDividend[] = [];
+  for (const [key, payment] of payments) {
+    if (payment.gross.length === 0) continue;
+    dividends.push({
+      externalId: `div:${key}`,
+      brokerTicker: payment.ticker,
+      symbol: payment.symbol,
+      name: payment.name,
+      time: payment.time,
+      gross: sumExact(payment.gross),
+      tax: payment.tax.length > 0 ? sumExact(payment.tax) : 0,
+      currency: accountCurrency,
+      perShare: payment.perShare,
+    });
+  }
+  return dividends.sort((a, b) => a.time - b.time);
+}
+
+/**
+ * Money in and out of the account: deposits, withdrawals, transfers between
+ * accounts (by their sign) and the interest on free funds with its tax.
+ * Purchases and sales are left out: the trades bring them.
+ */
+function readMoneyOperations(sheet: Cell[][] | undefined): ImportedCashOperation[] {
+  const cash = table(sheet, 'Type');
+  if (!cash) return [];
+  const operations: ImportedCashOperation[] = [];
+  const seen = new Set<string>();
+  for (const row of cash.rows) {
+    const type = text(cash.column(row, 'Type'));
+    const amount = number(cash.column(row, 'Amount'));
+    const at = time(cash.column(row, 'Time'));
+    const id = text(cash.column(row, 'ID'));
+    if (amount == null || amount === 0 || at == null || !id || seen.has(id)) continue;
+    let kind: ImportedCashOperation['type'] | null = null;
+    if (type === 'Deposit') kind = 'deposit';
+    else if (type === 'Withdrawal') kind = 'withdrawal';
+    else if (type === 'Transfer') kind = amount > 0 ? 'deposit' : 'withdrawal';
+    else if (type === 'Free funds interest') kind = 'interest';
+    else if (type === 'Free funds interest tax') kind = 'tax';
+    if (!kind) continue;
+    seen.add(id);
+    operations.push({
+      externalId: `cash:${id}`,
+      type: kind,
+      amount: Math.abs(amount),
+      time: at,
+      note: text(cash.column(row, 'Comment')) || null,
+    });
+  }
+  return operations.sort((a, b) => a.time - b.time);
 }
 
 type Purchase = Omit<ImportedTrade, 'side' | 'externalId'> & { positionId: string };
@@ -271,10 +413,12 @@ export function parseXtbFile(bytes: Uint8Array, fileName: string): ImportFile {
       const closeTime = time(closed.column(row, 'Close Time (UTC)'));
       if (!quantity || !openPrice || !closePrice || openTime == null || closeTime == null) continue;
 
+      // XTB's own rate of the purchase; without it, the rate is worked out
+      // from the cash paid once all parts of the position are known (below).
       const openRate = rateFor(
         instrument.currency,
         number(closed.column(row, 'Open Conversion Rate')),
-        nearest(cashPurchases.get(id), openTime),
+        null,
         quantity * openPrice
       );
       const closeRate = rateFor(
@@ -335,12 +479,8 @@ export function parseXtbFile(bytes: Uint8Array, fileName: string): ImportFile {
       const openTime = time(open.column(row, 'Open time (UTC)'));
       if (!label || !quantity || !openPrice || openTime == null) continue;
 
-      const rate = rateFor(
-        instrument.currency,
-        null,
-        nearest(cashPurchases.get(label), openTime),
-        quantity * openPrice
-      );
+      // Worked out from the cash paid, after the parts are merged (below).
+      const rate: number | null = null;
       const commission = Math.abs(number(open.column(row, 'Open Commission')) ?? 0);
       addPurchase({
         brokerTicker: ticker,
@@ -360,7 +500,21 @@ export function parseXtbFile(bytes: Uint8Array, fileName: string): ImportFile {
   }
 
   for (const { positionId: id, ...purchase } of purchases.values()) {
-    trades.push({ ...purchase, externalId: `${id}:buy`, side: 'buy' });
+    // The cash paid for the whole position (all its parts and fills) over the
+    // whole volume: a partly closed or partly filled position stays right.
+    let fxRate = purchase.fxRate;
+    if (fxRate == null && accountCurrency && purchase.currency !== accountCurrency) {
+      const paid = totalNear(cashPurchases.get(id), purchase.time);
+      const value = purchase.quantity * purchase.price;
+      if (paid != null && paid > 0 && value > 0) fxRate = paid / value;
+    }
+    trades.push({
+      ...purchase,
+      fxRate,
+      feeCurrency: purchase.fee > 0 && fxRate != null ? accountCurrency : purchase.feeCurrency,
+      externalId: `${id}:buy`,
+      side: 'buy',
+    });
   }
   trades.sort((a, b) => a.time - b.time);
 
@@ -373,7 +527,17 @@ export function parseXtbFile(bytes: Uint8Array, fileName: string): ImportFile {
     if (count > 0) trade.externalId = `${trade.externalId}:${count + 1}`;
   }
 
-  return { accountCurrency, trades, unsupportedTickers: [...unsupported].sort() };
+  const dividends = readDividends(workbook.get('Cash Operations'), accountCurrency, instrumentOf);
+
+  const cashOperations = readMoneyOperations(workbook.get('Cash Operations'));
+
+  return {
+    accountCurrency,
+    trades,
+    dividends,
+    cashOperations,
+    unsupportedTickers: [...unsupported].sort(),
+  };
 }
 
 export const XTB: Broker = {

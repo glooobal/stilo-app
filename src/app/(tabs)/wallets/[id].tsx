@@ -6,7 +6,12 @@ import { HeaderTitle } from '@/components/header-title';
 import { PortfolioDashboard } from '@/components/portfolio-dashboard';
 import { Colors } from '@/constants/colors';
 import { usePortfolioDashboard } from '@/hooks/use-portfolio-dashboard';
-import { openImport, openNewTransaction, openPortfolioEditor } from '@/lib/navigation';
+import {
+  openCashOperation,
+  openImport,
+  openNewTransaction,
+  openPortfolioEditor,
+} from '@/lib/navigation';
 import { formatSyncStatus } from '@/lib/quotes-status';
 
 /** One portfolio: the same panels as the summary, limited to this portfolio. */
@@ -24,6 +29,8 @@ export default function PortfolioScreen() {
 
   return (
     <>
+      {/* The plain title names the back button of positions opened from here. */}
+      <Stack.Screen options={{ title: portfolio.name }} />
       <Stack.Title asChild>
         <HeaderTitle
           title={portfolio.name}
@@ -48,6 +55,20 @@ export default function PortfolioScreen() {
             onPress={() => openNewTransaction('sell', undefined, portfolio.id)}>
             Sprzedaż
           </Stack.Toolbar.MenuAction>
+          {portfolio.isCash ? (
+            <Stack.Toolbar.MenuAction
+              icon="arrow.down.circle"
+              onPress={() => openCashOperation('deposit', portfolio.id)}>
+              Wpłata
+            </Stack.Toolbar.MenuAction>
+          ) : null}
+          {portfolio.isCash ? (
+            <Stack.Toolbar.MenuAction
+              icon="arrow.up.circle"
+              onPress={() => openCashOperation('withdrawal', portfolio.id)}>
+              Wypłata
+            </Stack.Toolbar.MenuAction>
+          ) : null}
           <Stack.Toolbar.MenuAction
             icon="square.and.arrow.down"
             onPress={() => openImport(portfolio.id)}>
