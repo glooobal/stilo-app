@@ -113,7 +113,11 @@ function readCashOperations(sheet: Cell[][] | undefined) {
   const seen = new Set<string>();
   for (const row of cash.rows) {
     const type = text(cash.column(row, 'Type'));
-    const target = type === 'Stock purchase' ? purchases : type === 'Stock sell' ? sales : null;
+    const target = /stock purchase/i.test(type)
+      ? purchases
+      : /stock (sell|sale)/i.test(type)
+        ? sales
+        : null;
     if (!target) continue;
     const id = positionId(cash.column(row, 'Position ID'));
     const operationId = text(cash.column(row, 'ID'));
@@ -211,11 +215,17 @@ function accountCurrencyOf(
   return null;
 }
 
-const DIVIDEND_TYPES = new Set(['Dividend', 'Dividend from foreign company on PL market']);
-const DIVIDEND_TAX_TYPES = new Set([
-  'Withholding tax',
-  'Tax from dividend from foreign company on PL market',
-]);
+/** A dividend payment ("Dividend", older exports: "DIVIDENT"). */
+function isDividendType(type: string): boolean {
+  const lower = type.toLowerCase();
+  return /divid(en|ent)/.test(lower) && !/tax/.test(lower);
+}
+
+/** The tax withheld from a dividend. */
+function isDividendTaxType(type: string): boolean {
+  const lower = type.toLowerCase();
+  return /withholding tax/.test(lower) || (/tax/.test(lower) && /divid(en|ent)/.test(lower));
+}
 
 /**
  * Dividends from the cash operations: XTB books every lot separately (with
@@ -243,8 +253,8 @@ function readDividends(
 
   for (const row of cash.rows) {
     const type = text(cash.column(row, 'Type'));
-    const isDividend = DIVIDEND_TYPES.has(type);
-    if (!isDividend && !DIVIDEND_TAX_TYPES.has(type)) continue;
+    const isDividend = isDividendType(type);
+    if (!isDividend && !isDividendTaxType(type)) continue;
     const operationId = text(cash.column(row, 'ID'));
     if (operationId && seen.has(operationId)) continue;
     if (operationId) seen.add(operationId);
@@ -295,12 +305,30 @@ function readDividends(
   return dividends.sort((a, b) => a.time - b.time);
 }
 
+/** How a cash operation of the file counts for the cash of the portfolio. */
+function moneyOperationType(type: string, amount: number): ImportedCashOperation['type'] {
+  const lower = type.toLowerCase();
+  if (/interest|odsetk/.test(lower)) return /tax|podat/.test(lower) || amount < 0 ? 'tax' : 'interest';
+  if (/transfer|przelew/.test(lower)) return amount > 0 ? 'deposit' : 'withdrawal';
+  if (/deposit|wpłat/.test(lower)) return amount > 0 ? 'deposit' : 'withdrawal';
+  if (/withdraw|wypłat/.test(lower)) return amount < 0 ? 'withdrawal' : 'deposit';
+  return amount > 0 ? 'income' : 'fee';
+}
+
 /**
- * Money in and out of the account: deposits, withdrawals, transfers between
- * accounts (by their sign) and the interest on free funds with its tax.
- * Purchases and sales are left out: the trades bring them.
+ * Every cash operation that the trades and dividends do not already bring,
+ * so the cash of the portfolio matches the account: deposits, withdrawals,
+ * transfers (by their sign), interest and its tax, and everything else as
+ * other income or a fee (e.g. currency conversion, corrections, the result
+ * of CFD positions, dividends of instruments the app cannot import).
  */
-function readMoneyOperations(sheet: Cell[][] | undefined): ImportedCashOperation[] {
+function readMoneyOperations(
+  sheet: Cell[][] | undefined,
+  /** Positions imported as trades: their purchases, sales and commissions are in the trades. */
+  tradedPositions: ReadonlySet<string>,
+  /** Dividends of these instruments are imported as dividends. */
+  isImportedInstrument: (ticker: string, category: string) => boolean
+): ImportedCashOperation[] {
   const cash = table(sheet, 'Type');
   if (!cash) return [];
   const operations: ImportedCashOperation[] = [];
@@ -310,21 +338,27 @@ function readMoneyOperations(sheet: Cell[][] | undefined): ImportedCashOperation
     const amount = number(cash.column(row, 'Amount'));
     const at = time(cash.column(row, 'Time'));
     const id = text(cash.column(row, 'ID'));
-    if (amount == null || amount === 0 || at == null || !id || seen.has(id)) continue;
-    let kind: ImportedCashOperation['type'] | null = null;
-    if (type === 'Deposit') kind = 'deposit';
-    else if (type === 'Withdrawal') kind = 'withdrawal';
-    else if (type === 'Transfer') kind = amount > 0 ? 'deposit' : 'withdrawal';
-    else if (type === 'Free funds interest') kind = 'interest';
-    else if (type === 'Free funds interest tax') kind = 'tax';
-    if (!kind) continue;
+    if (!type || amount == null || amount === 0 || at == null || !id || seen.has(id)) continue;
+
+    const position = positionId(cash.column(row, 'Position ID'));
+    const ticker = text(cash.column(row, 'Ticker'));
+    const category = text(cash.column(row, 'Category'));
+    const isDividend = isDividendType(type) || isDividendTaxType(type);
+    if (isDividend && ticker && isImportedInstrument(ticker, category)) continue;
+    if (!isDividend && position && tradedPositions.has(position)) continue;
+    if (!isDividend && /stock (purchase|sell|sale)/i.test(type)) continue;
+
     seen.add(id);
+    const kind = moneyOperationType(type, amount);
+    const comment = text(cash.column(row, 'Comment'));
+    const isOther = kind === 'income' || kind === 'fee';
     operations.push({
       externalId: `cash:${id}`,
       type: kind,
       amount: Math.abs(amount),
       time: at,
-      note: text(cash.column(row, 'Comment')) || null,
+      // Other operations keep the broker's name, so the user sees what they were.
+      note: isOther ? [type, ticker, comment].filter(Boolean).join(' · ') : comment || null,
     });
   }
   return operations.sort((a, b) => a.time - b.time);
@@ -529,7 +563,15 @@ export function parseXtbFile(bytes: Uint8Array, fileName: string): ImportFile {
 
   const dividends = readDividends(workbook.get('Cash Operations'), accountCurrency, instrumentOf);
 
-  const cashOperations = readMoneyOperations(workbook.get('Cash Operations'));
+  const tradedPositions = new Set([...purchases.keys()]);
+  const isImportedInstrument = (ticker: string, category: string) =>
+    mapXtbTicker(ticker) != null &&
+    (CATEGORIES[category.toUpperCase()] ?? (category ? null : 'EQUITY')) != null;
+  const cashOperations = readMoneyOperations(
+    workbook.get('Cash Operations'),
+    tradedPositions,
+    isImportedInstrument
+  );
 
   return {
     accountCurrency,

@@ -90,6 +90,67 @@ describe('a cash portfolio', () => {
   });
 });
 
+describe('a cash portfolio in another currency', () => {
+  // A EUR cash portfolio shown in PLN: 100 EUR deposited at 4.00, the euro at 4.50 now.
+  const eurPln = (rate: number, previous = rate): PriceHistory => ({
+    symbol: 'EURPLN=X',
+    currency: 'PLN',
+    price: rate,
+    previousClose: previous,
+    points: [
+      { time: day('2026-03-01'), close: 4 },
+      { time: day('2026-03-09'), close: rate },
+    ],
+  });
+  const data: MarketSnapshot = {
+    ...snapshotOf([['2026-03-02', 100], ['2026-03-09', 100]]),
+    fxHistories: new Map([['EUR', eurPln(4.5)]]),
+    fxQuotes: new Map([['EUR', eurPln(4.5)]]),
+    fxSinceFirstTrade: new Map([['EUR', eurPln(4.5)]]),
+  };
+  const cash = {
+    portfolioIds: new Set(['eur']),
+    operations: [deposit(100, '2026-03-01', 'eur')],
+    currencies: new Map([['eur', 'EUR']]),
+  };
+
+  it('values the cash at today\'s rate and the deposit at its own', () => {
+    const series = buildPortfolioSeries([], data, 'ALL', 'PLN', null, now, [], cash);
+    expect(series.cash).toBeCloseTo(450, 10);
+    expect(series.currentValue).toBeCloseTo(450, 10);
+    // 400 put in, worth 450: the euro gained 50.
+    expect(series.currentProfit).toBeCloseTo(50, 10);
+  });
+});
+
+describe('a foreign purchase in a PLN cash portfolio', () => {
+  it('takes from the cash exactly what the purchase cost at its rate', () => {
+    const { positions } = buildPositions([
+      makeTransaction({
+        id: 'usd', side: 'buy', quantity: 2, price: 50, currency: 'USD', fxRate: 3.75,
+        tradedAt: '2026-03-02', portfolioId: 'cash',
+      }),
+    ]);
+    const usdPln: PriceHistory = {
+      symbol: 'USDPLN=X', currency: 'PLN', price: 3.8, previousClose: 3.8,
+      points: [{ time: day('2026-03-02'), close: 3.76 }, { time: day('2026-03-09'), close: 3.8 }],
+    };
+    const data: MarketSnapshot = {
+      ...snapshotOf([['2026-03-02', 50], ['2026-03-09', 50]]),
+      fxHistories: new Map([['USD', usdPln]]),
+      fxQuotes: new Map([['USD', usdPln]]),
+      fxSinceFirstTrade: new Map([['USD', usdPln]]),
+    };
+    const series = buildPortfolioSeries(positions, data, 'ALL', 'PLN', null, now, [], {
+      portfolioIds: new Set(['cash']),
+      operations: [deposit(1000, '2026-03-01')],
+      currencies: new Map([['cash', 'PLN']]),
+    });
+    // 1000 − 2 × 50 × 3.75
+    expect(series.cash).toBeCloseTo(625, 10);
+  });
+});
+
 describe('estimateCashBalance', () => {
   it('follows deposits, trades and dividends up to the date', () => {
     const transactions = [

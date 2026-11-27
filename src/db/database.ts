@@ -172,6 +172,38 @@ const MIGRATIONS: string[] = [
     ON cash_operations (portfolio_id, source, external_id)
     WHERE external_id IS NOT NULL;
   `,
+  // v9: two more kinds of cash operations, so the cash of an imported
+  // account matches the broker's: fees (e.g. currency conversion, stamp
+  // duty) and other income (e.g. corrections). SQLite cannot change a CHECK
+  // constraint, so the table is copied.
+  `
+  CREATE TABLE cash_operations_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    portfolio_id TEXT NOT NULL REFERENCES portfolios (id),
+    type TEXT NOT NULL
+      CHECK (type IN ('deposit', 'withdrawal', 'interest', 'tax', 'fee', 'income')),
+    amount REAL NOT NULL CHECK (amount > 0),
+    date TEXT NOT NULL,
+    note TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    external_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  INSERT INTO cash_operations_new
+    (id, portfolio_id, type, amount, date, note, source, external_id, created_at, updated_at,
+     deleted_at)
+  SELECT id, portfolio_id, type, amount, date, note, source, external_id, created_at, updated_at,
+     deleted_at
+  FROM cash_operations;
+  DROP TABLE cash_operations;
+  ALTER TABLE cash_operations_new RENAME TO cash_operations;
+  CREATE INDEX cash_operations_portfolio ON cash_operations (portfolio_id, date);
+  CREATE UNIQUE INDEX cash_operations_external_id
+    ON cash_operations (portfolio_id, source, external_id)
+    WHERE external_id IS NOT NULL;
+  `,
 ];
 
 let database: SQLiteDatabase | null = null;

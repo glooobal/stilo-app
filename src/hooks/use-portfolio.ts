@@ -46,10 +46,15 @@ export function usePortfolioData(portfolioId?: string) {
   );
   /** Cash portfolios in scope, with their operations, for the valuation. */
   const cash = useMemo(() => {
-    const ids = portfolios
-      .filter((item) => item.isCash && (!portfolioId || item.id === portfolioId))
-      .map((item) => item.id);
-    return { portfolioIds: new Set(ids), operations: cashOperations };
+    const cashPortfolios = portfolios.filter(
+      (item) => item.isCash && (!portfolioId || item.id === portfolioId)
+    );
+    return {
+      portfolioIds: new Set(cashPortfolios.map((item) => item.id)),
+      operations: cashOperations,
+      // Cash is kept in each portfolio's own currency.
+      currencies: new Map(cashPortfolios.map((item) => [item.id, item.baseCurrency])),
+    };
   }, [portfolios, portfolioId, cashOperations]);
   const { positions, saleResults } = useMemo(() => buildPositions(transactions), [transactions]);
   const openPositions = useMemo(

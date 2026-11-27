@@ -121,6 +121,14 @@ function sampleFile(options: { withSummary: boolean }) {
     ['Free funds interest', '', '', '', excelDate('2026-10-03T13:14:14Z'), 0.05, '7', 'Interest', 'My Trades', ''],
     ['Free funds interest tax', '', '', '', excelDate('2026-10-03T13:13:51Z'), -0.01, '8', 'Tax', 'My Trades', ''],
     ['Deposit', '', '', '', excelDate('2026-01-02T10:00:00Z'), 5000, '9', 'Deposit', 'My Trades', ''],
+    ['IKE Deposit', '', '', '', excelDate('2026-01-03T10:00:00Z'), 200, '30', 'IKE deposit', 'My Trades', ''],
+    ['Currency conversion', '', '', '', excelDate('2026-05-04T14:00:02Z'), -2.5, '31', 'FX fee', 'My Trades', ''],
+    // The result of a CFD position the app does not import.
+    ['Close trade', 'Gold', 'GOLD', 'CFD', excelDate('2026-01-02T10:00:00Z'), 12.4, '32', 'Close', 'My Trades', '1'],
+    // A commission of an imported position is already in its trade.
+    ['Commission', 'Realty Income', 'O.US', 'STOCK', excelDate('2026-05-04T14:00:00Z'), -1, '33', 'Commission', 'My Trades', '3000'],
+    // A dividend of an instrument that cannot be imported still reaches the cash.
+    ['DIVIDENT', 'Gold', 'GOLD', 'CFD', excelDate('2026-02-01T10:00:00Z'), 3, '34', 'Dividend', 'My Trades', '1'],
     ['Withdrawal', '', '', '', excelDate('2026-11-20T10:00:00Z'), -1000, '10', 'Withdrawal', 'My Trades', ''],
     ['Transfer', '', '', '', excelDate('2026-11-19T09:32:12Z'), -2230.8, '11', 'Transfer to 52362817', 'My Trades', ''],
   ];
@@ -195,11 +203,20 @@ describe('parseXtbFile', () => {
   it('reads deposits, withdrawals, transfers and interest, without signs', () => {
     expect(file.cashOperations.map((item) => [item.type, item.amount])).toEqual([
       ['deposit', 5000],
+      ['income', 12.4],
+      ['deposit', 200],
+      ['income', 3],
+      ['fee', 2.5],
       ['tax', 0.01],
       ['interest', 0.05],
       ['withdrawal', 2230.8],
       ['withdrawal', 1000],
     ]);
+  });
+
+  it('keeps the broker name of other operations in the note', () => {
+    const fee = file.cashOperations.find((item) => item.type === 'fee');
+    expect(fee?.note).toBe('Currency conversion · FX fee');
   });
 
   it('reads the account currency from the summary', () => {

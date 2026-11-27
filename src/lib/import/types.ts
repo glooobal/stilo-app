@@ -1,4 +1,5 @@
 import type { TransactionSide } from '@/db/transactions';
+import type { CashOperationType } from '@/lib/cash';
 import type { InstrumentType } from '@/market/types';
 
 /** A trade read from a broker's file, before it is saved. */
@@ -53,7 +54,7 @@ export type ImportedDividend = {
 /** A deposit, withdrawal, interest or interest tax read from a broker's file. */
 export type ImportedCashOperation = {
   externalId: string;
-  type: 'deposit' | 'withdrawal' | 'interest' | 'tax';
+  type: CashOperationType;
   /** Exactly as in the file, without the sign; in the account currency. */
   amount: number;
   time: number;

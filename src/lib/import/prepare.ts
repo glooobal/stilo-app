@@ -82,12 +82,28 @@ async function resolveInstrument(
   signal: AbortSignal
 ): Promise<{ instrument: Instrument; isInPence: boolean } | null> {
   const firstDate = toISODate(new Date(trade.time));
+  const suffix = trade.symbol.includes('.') ? trade.symbol.split('.').pop()! : '';
+  const exchange = EXCHANGES[suffix] ?? { exchange: 'US', exchangeName: 'USA' };
   let quote: Awaited<ReturnType<typeof marketData.getQuote>>;
   try {
     quote = await marketData.getQuote(trade.symbol, firstDate, signal);
   } catch (error) {
     if (signal.aborted) throw error;
-    return null;
+    // No market data (e.g. delisted, or a ticker the provider does not
+    // know): the trades are still imported, valued at their own prices, so
+    // the history and the cash of the account stay complete.
+    const saved = getSavedInstrument(trade.symbol);
+    return {
+      instrument: {
+        symbol: trade.symbol,
+        name: saved?.name ?? trade.name,
+        exchange: saved?.exchange ?? exchange.exchange,
+        exchangeName: saved?.exchangeName ?? exchange.exchangeName,
+        type: saved?.type ?? trade.type,
+        currency: trade.currency,
+      },
+      isInPence: false,
+    };
   }
 
   // Splits (and dividends) since the first trade, to count every trade in
@@ -108,9 +124,6 @@ async function resolveInstrument(
       if (signal.aborted) throw error;
     }
   }
-  const suffix = trade.symbol.includes('.') ? trade.symbol.split('.').pop()! : '';
-  const exchange = EXCHANGES[suffix] ?? { exchange: 'US', exchangeName: 'USA' };
-
   // Some brokers quote London in pence: then the price is ~100× the market's.
   const ratio = quote.price > 0 ? trade.price / quote.price : 1;
   const isInPence = quote.currency === 'GBP' && ratio > 50 && ratio < 200;

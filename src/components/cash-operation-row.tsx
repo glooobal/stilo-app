@@ -11,6 +11,8 @@ const ICONS: Record<CashOperation['type'], SFSymbol> = {
   withdrawal: 'arrow.up.circle.fill',
   interest: 'percent',
   tax: 'building.columns.fill',
+  fee: 'minus.circle.fill',
+  income: 'plus.circle.fill',
 };
 
 /** A deposit, withdrawal, interest or tax in the operation history. */

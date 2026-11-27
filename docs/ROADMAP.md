@@ -16,6 +16,6 @@ Szczegóły (wygląd, teksty) do uzgodnienia przed implementacją.
 
 ## Nazwa
 
-Aplikacja nazywa się **Stilo** (getstilo.app). W App Store Connect i w identyfikatorze pakietu
-(`com.jg.12payouts`) wciąż jest stara nazwa; plik bazy danych zostaje `12payouts.db`, a kopie
+Aplikacja nazywa się **Stilo** (getstilo.app), identyfikator pakietu `com.zaza.stilo` (iOS i
+Android), schemat URL `stilo`. Plik bazy danych zostaje `12payouts.db`, a kopie
 zapasowe w starym formacie (`12payouts-backup`) nadal są czytane.

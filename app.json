@@ -5,11 +5,11 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "12payouts",
+    "scheme": "stilo",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.jg.12payouts",
+      "bundleIdentifier": "com.zaza.stilo",
       "buildNumber": "1",
       "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
     },
@@ -21,7 +21,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.jg.x12payouts"
+      "package": "com.zaza.stilo"
     },
     "web": {
       "output": "single",

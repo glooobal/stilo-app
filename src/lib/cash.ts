@@ -1,10 +1,18 @@
-export type CashOperationType = 'deposit' | 'withdrawal' | 'interest' | 'tax';
+/**
+ * - `deposit` / `withdrawal`: money put in or taken out (the capital);
+ * - `interest` / `tax`: interest on free cash and its tax;
+ * - `fee` / `income`: other costs and income of the account (e.g. a
+ *   currency conversion fee, a correction by the broker).
+ */
+export type CashOperationType = 'deposit' | 'withdrawal' | 'interest' | 'tax' | 'fee' | 'income';
 
 export const CASH_OPERATION_TYPES: readonly CashOperationType[] = [
   'deposit',
   'withdrawal',
   'interest',
   'tax',
+  'fee',
+  'income',
 ];
 
 export const CASH_OPERATION_LABELS: Record<CashOperationType, string> = {
@@ -12,7 +20,12 @@ export const CASH_OPERATION_LABELS: Record<CashOperationType, string> = {
   withdrawal: 'Wypłata',
   interest: 'Odsetki',
   tax: 'Podatek od odsetek',
+  fee: 'Opłata',
+  income: 'Inny przychód',
 };
+
+/** Types that add to the cash (the others take from it). */
+const INCOMING: readonly CashOperationType[] = ['deposit', 'interest', 'income'];
 
 /** Money in or out of a cash portfolio, in the portfolio currency. */
 export type CashOperation = {
@@ -30,11 +43,9 @@ export type CashOperation = {
 
 export type NewCashOperation = Omit<CashOperation, 'id'>;
 
-/** Amount with its direction: deposits and interest +, withdrawals and tax −. */
+/** Amount with its direction: deposits, interest and income +, the rest −. */
 export function signedCashAmount(operation: Pick<CashOperation, 'type' | 'amount'>): number {
-  return operation.type === 'deposit' || operation.type === 'interest'
-    ? operation.amount
-    : -operation.amount;
+  return INCOMING.includes(operation.type) ? operation.amount : -operation.amount;
 }
 
 /** Deposits and withdrawals are the money put in; interest and tax are a result. */

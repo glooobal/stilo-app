@@ -170,19 +170,30 @@ export function usePortfolioValuation(
     }
     return map;
   }, [positions]);
+  // Rates are needed for the instruments and for the cash of cash
+  // portfolios kept in another currency than the one shown.
   const currencies = useMemo(
     () => [
       ...new Set(
-        positions.map((p) => p.instrument.currency).filter((currency) => currency !== baseCurrency)
+        [
+          ...positions.map((p) => p.instrument.currency),
+          ...[...cash.portfolioIds].map((id) => cash.currencies?.get(id) ?? baseCurrency),
+        ].filter((currency) => currency !== baseCurrency)
       ),
     ],
-    [positions, baseCurrency]
+    [positions, baseCurrency, cash]
   );
   const firstTradeDate = useMemo(() => {
     let first: string | undefined;
     for (const date of firstTrades.values()) if (!first || date < first) first = date;
+    // A deposit can come before the first trade; its rate is needed too.
+    for (const operation of cash.operations) {
+      if (cash.portfolioIds.has(operation.portfolioId) && (!first || operation.date < first)) {
+        first = operation.date;
+      }
+    }
     return first;
-  }, [firstTrades]);
+  }, [firstTrades, cash]);
 
   // What to download, as text: a new operation of an instrument already held
   // changes the positions but not this, so it does not reload anything.
@@ -191,11 +202,12 @@ export function usePortfolioValuation(
     withHistory ? 'history' : 'quotes',
     [...firstTrades].map(([symbol, date]) => `${symbol}@${date}`).join(','),
     currencies.join(','),
+    firstTradeDate ?? '',
   ].join('|');
 
   useEffect(() => {
     const symbols = [...firstTrades.keys()];
-    if (symbols.length === 0) {
+    if (symbols.length === 0 && currencies.length === 0) {
       // Nothing to download; a cash portfolio is still valued (its cash).
       const empty: MarketData = {
         quotes: new Map(),
@@ -262,7 +274,8 @@ export function usePortfolioValuation(
         const [daily, fxDaily] = await historyLoad;
         if (isCancelled) return;
         const failed = quotes.failed + fxQuotes.failed + daily.failed + fxDaily.failed;
-        const nothingLoaded = quotes.map.size === 0 && daily.map.size === 0;
+        const nothingLoaded =
+          symbols.length > 0 && quotes.map.size === 0 && daily.map.size === 0;
         const usedStored = quotes.usedStored || fxQuotes.usedStored;
         setState({
           data: {

@@ -4,7 +4,7 @@ import type { ChartRange, PriceHistory, PricePoint } from '@/market/types';
 import { fromISODate, toISODate } from './date';
 import { isCapitalOperation, signedCashAmount, type CashOperation } from './cash';
 import { dividendInBase, type Dividend } from './dividends';
-import { checkedTradeRate, convertTrade, tradeRate } from './fx';
+import { checkedTradeRate, convertTrade, tradeDayEnd, tradeRate } from './fx';
 import { baseLedgerTotals, quantityOn, type Position } from './positions';
 
 /** What the valuation needs of a dividend. */
@@ -432,9 +432,28 @@ export function withChanges(
 export type CashInput = {
   portfolioIds: ReadonlySet<string>;
   operations: readonly Pick<CashOperation, 'portfolioId' | 'type' | 'amount' | 'date'>[];
+  /** Currency of each cash portfolio (its cash is kept in it); the base one when missing. */
+  currencies?: ReadonlyMap<string, string>;
 };
 
 const NO_CASH: CashInput = { portfolioIds: new Set(), operations: [] };
+
+/** A change of the cash of a cash portfolio, in the portfolio's own currency. */
+type CashFlow = Flow & { currency: string };
+
+/** Cash per currency at the end of a date, from flows sorted by date. */
+function cashCursor(flows: readonly CashFlow[]) {
+  let index = 0;
+  const balances = new Map<string, number>();
+  return (date: string): ReadonlyMap<string, number> => {
+    while (index < flows.length && flows[index].date <= date) {
+      const flow = flows[index];
+      balances.set(flow.currency, (balances.get(flow.currency) ?? 0) + flow.amount);
+      index++;
+    }
+    return balances;
+  };
+}
 
 function byDate(a: { date: string }, b: { date: string }) {
   return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
@@ -453,10 +472,13 @@ function cursor(flows: Flow[]) {
   };
 }
 
-function sumUntil(flows: Flow[], date: string) {
-  let total = 0;
-  for (const flow of flows) if (flow.date <= date) total += flow.amount;
-  return total;
+/** Cash per currency at the end of a date. */
+function cashBalancesOn(flows: readonly CashFlow[], date: string): Map<string, number> {
+  const balances = new Map<string, number>();
+  for (const flow of flows) {
+    if (flow.date <= date) balances.set(flow.currency, (balances.get(flow.currency) ?? 0) + flow.amount);
+  }
+  return balances;
 }
 
 /**
@@ -489,10 +511,23 @@ export function buildPortfolioSeries(
     portfolioId != null && cash.portfolioIds.has(portfolioId);
 
   const trades = buildFlows(positions, baseCurrency, flowFxAt);
+  const cashCurrencyOf = (portfolioId: string | undefined) =>
+    (portfolioId != null ? cash.currencies?.get(portfolioId) : null) ?? baseCurrency;
+  /** Rate of `currency` in `target` from the rates in the base currency. */
+  const crossFx = (target: string) => (currency: string, time: number) => {
+    if (currency === target) return 1;
+    const from = flowFxAt(currency, time);
+    const to = flowFxAt(target, time);
+    return from != null && to ? from / to : null;
+  };
+  let isIncomplete = false;
   /** Money put in (+) or taken out (−). */
   const capital: Flow[] = [];
-  /** Changes of the cash balance of cash portfolios. */
-  const cashMoves: Flow[] = [];
+  /**
+   * Changes of the cash of cash portfolios, each in the portfolio currency:
+   * cash in euros is worth more złoty when the euro rises.
+   */
+  const cashMoves: CashFlow[] = [];
   /** Dividends of regular portfolios: income on top of the value. */
   const income: Flow[] = [];
   /** Dividends of cash portfolios (already in the value, as cash). */
@@ -500,14 +535,37 @@ export function buildPortfolioSeries(
   let allDividends = 0;
 
   for (const trade of trades) {
-    if (isCash(trade.portfolioId)) cashMoves.push({ date: trade.date, amount: -trade.amount });
-    else capital.push(trade);
+    if (!isCash(trade.portfolioId)) capital.push(trade);
+  }
+  // Trades of cash portfolios move their cash, in the portfolio currency
+  // (exactly at the rate of the trade when it was given in that currency).
+  for (const position of positions) {
+    for (const transaction of position.transactions) {
+      if (!isCash(transaction.portfolioId)) continue;
+      const currency = cashCurrencyOf(transaction.portfolioId);
+      const rate = checkedTradeRate(transaction, currency, crossFx(currency));
+      if (rate == null) {
+        isIncomplete = true;
+        continue;
+      }
+      cashMoves.push({
+        date: transaction.tradedAt,
+        amount: -cashFlow(convertTrade(transaction, rate, currency)),
+        currency,
+      });
+    }
   }
   for (const operation of cash.operations) {
     if (!isCash(operation.portfolioId)) continue;
+    const currency = cashCurrencyOf(operation.portfolioId);
     const amount = signedCashAmount(operation);
-    cashMoves.push({ date: operation.date, amount });
-    if (isCapitalOperation(operation)) capital.push({ date: operation.date, amount });
+    cashMoves.push({ date: operation.date, amount, currency });
+    if (isCapitalOperation(operation)) {
+      // Money put in counts at the rate of its day.
+      const rate = flowFxAt(currency, tradeDayEnd(operation.date));
+      if (rate == null) isIncomplete = true;
+      else capital.push({ date: operation.date, amount: amount * rate });
+    }
   }
   for (const dividend of dividends) {
     const amounts = dividendInBase(dividend, baseCurrency, flowFxAt);
@@ -515,7 +573,13 @@ export function buildPortfolioSeries(
     allDividends += amounts.net;
     const flow = { date: dividend.paidAt, amount: amounts.net };
     if (isCash(dividend.portfolioId)) {
-      cashMoves.push(flow);
+      const currency = cashCurrencyOf(dividend.portfolioId);
+      const net =
+        dividend.currency === currency
+          ? dividend.gross - dividend.tax
+          : (dividendInBase(dividend, currency, crossFx(currency))?.net ?? null);
+      if (net == null) isIncomplete = true;
+      else cashMoves.push({ date: dividend.paidAt, amount: net, currency });
       cashIncome.push(flow);
     } else income.push(flow);
   }
@@ -525,11 +589,26 @@ export function buildPortfolioSeries(
   cashIncome.sort(byDate);
 
   const totalCapital = capital.reduce((sum, flow) => sum + flow.amount, 0);
-  const totalCash = cashMoves.reduce((sum, flow) => sum + flow.amount, 0);
   const totalIncome = income.reduce((sum, flow) => sum + flow.amount, 0);
   const peakInvested = peakCapital(capital);
   const hasCash = cash.portfolioIds.size > 0;
-  let isIncomplete = false;
+
+  /** Cash in the base currency: every currency at the given rate. */
+  const cashValue = (
+    balances: ReadonlyMap<string, number>,
+    rateOf: (currency: string) => number | null
+  ) => {
+    let total = 0;
+    for (const [currency, balance] of balances) {
+      if (balance === 0) continue;
+      const rate = rateOf(currency);
+      if (rate == null) isIncomplete = true;
+      else total += balance * rate;
+    }
+    return total;
+  };
+  const cashNow = cashCursor(cashMoves)('9999-12-31');
+  const totalCash = cashValue(cashNow, (currency) => currentFx(baseCurrency, snapshot, currency));
 
   // Current value from the latest prices (or the last known ones), plus cash.
   const valuations = new Map<string, PositionValuation>();
@@ -560,15 +639,14 @@ export function buildPortfolioSeries(
     positions.map((position) => [position.instrument.symbol, quantityTimeline(position)])
   );
   const capitalAt = cursor(capital);
-  const cashAt = cursor(cashMoves);
+  const cashAt = cashCursor(cashMoves);
   const incomeAt = cursor(income);
   let points: RawPoint[] = [];
   for (const time of sortedTimes) {
     const date = toISODate(new Date(time));
     const investedSoFar = capitalAt(date);
-    const cashSoFar = cashAt(date);
     const incomeSoFar = incomeAt(date);
-    let value = hasCash ? cashSoFar : 0;
+    let value = hasCash ? cashValue(cashAt(date), (currency) => fxAt(currency, time)) : 0;
     for (const position of positions) {
       const quantity = quantityAt(timelines.get(position.instrument.symbol)!, date);
       if (quantity <= 0) continue;
@@ -640,7 +718,13 @@ export function buildPortfolioSeries(
   if (range === '1D') {
     // The daily change is measured against yesterday's close.
     const previousDay = dayBefore(startDate);
-    startValue = hasCash ? sumUntil(cashMoves, previousDay) : 0;
+    const previousRate = (currency: string) =>
+      currency === baseCurrency
+        ? 1
+        : (snapshot.fxQuotes.get(currency)?.previousClose ??
+          snapshot.fxQuotes.get(currency)?.points[0]?.close ??
+          null);
+    startValue = hasCash ? cashValue(cashBalancesOn(cashMoves, previousDay), previousRate) : 0;
     for (const position of positions) {
       const quantity = quantityOn(position.transactions, previousDay);
       if (quantity <= 0) continue;

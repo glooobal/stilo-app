@@ -25,6 +25,7 @@ import { usePortfolios } from '@/hooks/use-portfolio';
 import {
   CASH_OPERATION_LABELS,
   CASH_OPERATION_TYPES,
+  signedCashAmount,
   type CashOperationType,
 } from '@/lib/cash';
 import { fromISODate, toISODate } from '@/lib/date';
@@ -191,10 +192,7 @@ export default function CashOperationScreen() {
           {amount != null && amount > 0 && portfolio ? (
             <FieldGroup.Section>
               <ListItem
-                trailing={formatMoney(
-                  type === 'deposit' || type === 'interest' ? amount : -amount,
-                  portfolio.baseCurrency
-                )}>
+                trailing={formatMoney(signedCashAmount({ type, amount }), portfolio.baseCurrency)}>
                 Zmiana salda
               </ListItem>
             </FieldGroup.Section>
