@@ -26,8 +26,19 @@ type NativeChartProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-/** Swift Charts view from the local `modules/portfolio-chart` module. */
-const NativePortfolioChart = requireNativeView<NativeChartProps>('PortfolioChart');
+/**
+ * Swift Charts view from the local `modules/portfolio-chart` module. Looked
+ * up defensively: when the bundle is evaluated where the native view does
+ * not exist (a build step, a build without the module), the app must not
+ * fail to load over a chart.
+ */
+const NativePortfolioChart = (() => {
+  try {
+    return requireNativeView<NativeChartProps>('PortfolioChart');
+  } catch {
+    return null;
+  }
+})();
 
 const defaultFormatValue = (value: number) => value.toFixed(2).replace('.', ',');
 
@@ -89,25 +100,27 @@ export function ValueChart({
         entering={FadeIn.duration(250)}
         exiting={FadeOut.duration(200)}
         style={StyleSheet.absoluteFill}>
-        <NativePortfolioChart
-          values={values}
-          secondaryValues={secondaryValues}
-          extraSeries={extraSeries}
-          markers={markers}
-          valueFormat={valueFormat}
-          showsArea={showsArea}
-          baseline={baseline}
-          color={color}
-          compact={compact}
-          xLabels={compact ? [] : xLabels}
-          accessibilityTitle={accessibilityLabel}
-          pointLabels={pointLabels}
-          onScrub={(event) => {
-            const index = event.nativeEvent.index;
-            onScrub?.(index >= 0 ? index : null);
-          }}
-          style={{ height: totalHeight }}
-        />
+        {NativePortfolioChart ? (
+          <NativePortfolioChart
+            values={values}
+            secondaryValues={secondaryValues}
+            extraSeries={extraSeries}
+            markers={markers}
+            valueFormat={valueFormat}
+            showsArea={showsArea}
+            baseline={baseline}
+            color={color}
+            compact={compact}
+            xLabels={compact ? [] : xLabels}
+            accessibilityTitle={accessibilityLabel}
+            pointLabels={pointLabels}
+            onScrub={(event) => {
+              const index = event.nativeEvent.index;
+              onScrub?.(index >= 0 ? index : null);
+            }}
+            style={{ height: totalHeight }}
+          />
+        ) : null}
       </Animated.View>
     </View>
   );
