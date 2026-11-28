@@ -30,6 +30,7 @@ import {
   type AccountType,
   type PortfolioIcon,
 } from '@/db/portfolios';
+import { track } from '@/lib/analytics';
 import { confirmDeletePortfolio } from '@/lib/portfolio-actions';
 
 const ERROR_COLOR = '#FF3B30';
@@ -87,7 +88,10 @@ export default function PortfolioFormScreen() {
     if (!canSave) return;
     const input = { name, baseCurrency: currency, accountType, icon, includeDividends };
     if (existing) updatePortfolio(existing.id, input);
-    else createPortfolio({ ...input, isCash });
+    else {
+      createPortfolio({ ...input, isCash });
+      track({ name: 'portfolio_create', params: { account_type: accountType, is_cash: isCash } });
+    }
     close();
   };
 

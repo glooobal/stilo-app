@@ -10,8 +10,11 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.zaza.stilo",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "buildNumber": "1",
-      "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -38,7 +41,17 @@
         }
       ],
       "expo-sqlite",
-      "expo-notifications"
+      "expo-notifications",
+      "@react-native-firebase/app",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "dynamic"
+          }
+        }
+      ],
+      "@react-native-firebase/analytics"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -10,6 +10,7 @@ import { getAppVersion } from '@/lib/app-version';
 import { CONTACT_EMAIL } from '@/lib/contact';
 import { backupFileName } from '@/lib/backup';
 import { readNumberPreference, writePreference } from '@/lib/preferences';
+import { isAnalyticsOn, setAnalyticsOn, track } from '@/lib/analytics';
 import { areDividendNotificationsOn, setDividendNotifications } from '@/lib/notifications';
 import { formatUpdatedAt } from '@/lib/quotes-status';
 import { setSummaryCurrency, useSummaryCurrency } from '@/lib/settings';
@@ -30,6 +31,11 @@ export default function SettingsScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const appVersion = getAppVersion();
   const [notificationsOn, setNotificationsOn] = useState(areDividendNotificationsOn);
+  const [analyticsOn, setAnalyticsOnState] = useState(isAnalyticsOn);
+  const changeAnalytics = (isOn: boolean) => {
+    setAnalyticsOnState(isOn);
+    setAnalyticsOn(isOn);
+  };
   const changeNotifications = async (isOn: boolean) => {
     setNotificationsOn(isOn);
     const granted = await setDividendNotifications(isOn);
@@ -73,6 +79,7 @@ export default function SettingsScreen() {
       const now = Date.now();
       writePreference(LAST_BACKUP_PREFERENCE, String(now));
       setLastBackupAt(now);
+      track({ name: 'backup_save', params: {} });
       Alert.alert('Zapisano kopię zapasową', `Plik „${file.name}” w folderze „${directory.name}”.`);
     } catch (error) {
       Alert.alert(
@@ -130,6 +137,20 @@ export default function SettingsScreen() {
               <Text>
                 W dniu szacowanej wypłaty dywidendy i gdy osiągniesz cel dywidendowy – także gdy
                 aplikacja jest zamknięta.
+              </Text>
+            </FieldGroup.SectionFooter>
+          </FieldGroup.Section>
+
+          <FieldGroup.Section title="Prywatność">
+            <Row alignment="center" spacing={8}>
+              <Text>Udostępniaj statystyki użycia</Text>
+              <Spacer />
+              <Switch value={analyticsOn} onValueChange={changeAnalytics} />
+            </Row>
+            <FieldGroup.SectionFooter>
+              <Text>
+                Anonimowe informacje o tym, z których ekranów i funkcji korzystasz. Nigdy Twoje
+                portfele, transakcje, kwoty ani nazwy walorów.
               </Text>
             </FieldGroup.SectionFooter>
           </FieldGroup.Section>

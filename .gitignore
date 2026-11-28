@@ -44,3 +44,9 @@ example
 
 .claude/
 .vscode/
+
+# Firebase config (keys of the Firebase project)
+GoogleService-Info.plist
+google-services.json
+
+docs/ROADMAP.md

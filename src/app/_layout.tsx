@@ -4,6 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { useAutoDividends } from '@/hooks/use-auto-dividends';
 import { useDividendNotifications } from '@/hooks/use-dividend-notifications';
+import { useScreenTracking } from '@/hooks/use-screen-tracking';
 import { useLiveQuotes } from '@/market/live-quotes';
 
 export default function RootLayout() {
@@ -11,6 +12,7 @@ export default function RootLayout() {
   useAutoDividends();
   useLiveQuotes();
   useDividendNotifications();
+  useScreenTracking();
 
   return (
     // Needed for gestures such as swipe actions on list rows.

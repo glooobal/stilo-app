@@ -30,6 +30,7 @@ import { usePortfolioData } from '@/hooks/use-portfolio';
 import { formatDisplayDate, fromISODate, toISODate, todayISODate } from '@/lib/date';
 import { estimateCashBalance } from '@/lib/cash';
 import { calculateSaleProfit, findOversell, type Trade } from '@/lib/fifo';
+import { track } from '@/lib/analytics';
 import { convertTrade, isImplausibleRate, tradeRate } from '@/lib/fx';
 import { formatDecimalInput, formatMoney, formatProfit, parseDecimal } from '@/lib/number';
 import { quantityOn } from '@/lib/positions';
@@ -474,6 +475,7 @@ function TransactionForm({ instrument, side, existing, initialPortfolioId }: Tra
     } else {
       saveInstrument({ ...instrument, currency });
       addTransaction({ ...values, symbol: instrument.symbol, side });
+      track({ name: 'transaction_add', params: { side } });
     }
     writePreference(LAST_PORTFOLIO_PREFERENCE, portfolioId);
     close();

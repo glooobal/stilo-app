@@ -30,6 +30,7 @@ import {
 import { setDividendGoal, type GoalPeriod } from '@/lib/dividend-goal';
 import { haptic } from '@/lib/haptics';
 import { setDividendNotifications } from '@/lib/notifications';
+import { track } from '@/lib/analytics';
 import { markOnboardingDone } from '@/lib/onboarding';
 import { getSummaryCurrency } from '@/lib/settings';
 
@@ -133,7 +134,12 @@ export default function OnboardingScreen() {
     }, CELEBRATION_MS);
   };
 
-  const finish = () => {
+  const [createdPortfolio, setCreatedPortfolio] = useState(false);
+  const finish = (setGoal = false) => {
+    track({
+      name: 'onboarding_complete',
+      params: { created_portfolio: createdPortfolio, set_goal: setGoal },
+    });
     markOnboardingDone();
     router.back();
     // Asked once, at the end: reminders of payments and of the goal.
@@ -150,6 +156,8 @@ export default function OnboardingScreen() {
       includeDividends,
       isCash,
     });
+    track({ name: 'portfolio_create', params: { account_type: accountType, is_cash: isCash } });
+    setCreatedPortfolio(true);
     celebrate(() => setStep('goal'));
   };
 
@@ -164,7 +172,8 @@ export default function OnboardingScreen() {
       );
       return;
     }
-    celebrate(finish);
+    track({ name: 'dividend_goal_set', params: { period: goalPeriod } });
+    celebrate(() => finish(true));
   };
 
   const footer = (children: ReactNode) => (
@@ -270,7 +279,7 @@ export default function OnboardingScreen() {
                 disabled={!name.trim() || isCelebrating}
                 onPress={createFirstPortfolio}
               />
-              <SecondaryButton title="Pomiń i zobacz aplikację" onPress={finish} />
+              <SecondaryButton title="Pomiń i zobacz aplikację" onPress={() => finish()} />
             </>
           )}
         </Animated.View>
@@ -306,7 +315,7 @@ export default function OnboardingScreen() {
                 disabled={goalAmount == null || isCelebrating}
                 onPress={saveGoal}
               />
-              <SecondaryButton title="Nie teraz, przejdź do aplikacji" onPress={finish} />
+              <SecondaryButton title="Nie teraz, przejdź do aplikacji" onPress={() => finish()} />
             </>
           )}
         </Animated.View>

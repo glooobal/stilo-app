@@ -5,6 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { GoalEditor, parseGoalAmount } from '@/components/goal-editor';
 import { Colors } from '@/constants/colors';
 import { getDividendGoal, setDividendGoal, type GoalPeriod } from '@/lib/dividend-goal';
+import { track } from '@/lib/analytics';
 import { setDividendNotifications } from '@/lib/notifications';
 import { formatDecimalInput } from '@/lib/number';
 import { useSummaryCurrency } from '@/lib/settings';
@@ -27,6 +28,7 @@ export default function GoalSheet() {
     if (value == null) return;
     try {
       setDividendGoal({ amount: value, period: chosen, currency: code });
+      track({ name: 'dividend_goal_set', params: { period: chosen } });
     } catch (error) {
       Alert.alert(
         'Nie udało się zapisać celu',

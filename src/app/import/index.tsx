@@ -15,6 +15,7 @@ import { saveInstrument } from '@/db/instruments';
 import { addTransactions } from '@/db/transactions';
 import { usePortfolios } from '@/hooks/use-portfolio';
 import { BackupError, countActive, parseBackup, type Backup } from '@/lib/backup';
+import { track } from '@/lib/analytics';
 import { BROKERS } from '@/lib/import/brokers';
 import { prepareImport, type ImportPlan } from '@/lib/import/prepare';
 import type { Broker, ImportFile } from '@/lib/import/types';
@@ -159,6 +160,7 @@ export default function ImportScreen() {
     try {
       if (picked.kind === 'backup') {
         const { added, updated } = restoreBackup(picked.backup);
+        track({ name: 'backup_restore', params: {} });
         close();
         Alert.alert(
           'Przywrócono kopię zapasową',
@@ -174,6 +176,15 @@ export default function ImportScreen() {
       addDividends(dividendsToImport);
       addCashOperations(cashToImport);
       writePreference(LAST_PORTFOLIO_PREFERENCE, portfolio.id);
+      track({
+        name: 'import_complete',
+        params: {
+          broker: broker?.id ?? 'unknown',
+          trades: toImport.length,
+          dividends: dividendsToImport.length,
+          cash_operations: cashToImport.length,
+        },
+      });
       close();
       const dividendNote =
         dividendsToImport.length > 0
